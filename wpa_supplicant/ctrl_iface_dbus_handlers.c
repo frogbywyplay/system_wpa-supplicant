@@ -16,6 +16,7 @@
 
 #include "common.h"
 #include "config.h"
+#include "wpa.h"
 #include "wpa_supplicant_i.h"
 #include "ctrl_iface_dbus.h"
 #include "ctrl_iface_dbus_handlers.h"
@@ -23,6 +24,105 @@
 #include "dbus_dict_helpers.h"
 #include "ieee802_11_defs.h"
 
+#define CAPABILITIES_PROTO_WPA				(1 << 0)
+#define CAPABILITIES_PROTO_WPA2				(1 << 1)
+#define CAPABILITIES_PROTO_WEP				(1 << 2)
+
+#define CAPABILITIES_MODE_ADHOC				(1 << 4)
+#define CAPABILITIES_MODE_INFRA				(1 << 5)
+
+#define CAPABILITIES_PREAUTH				(1 << 15)
+
+#define CAPABILITIES_KEYMGMT_EAP			(1 << 16)
+#define CAPABILITIES_KEYMGMT_PSK			(1 << 17)
+#define CAPABILITIES_KEYMGMT_WPA_NONE		(1 << 18)
+#define CAPABILITIES_KEYMGMT_FT_EAP			(1 << 19)
+#define CAPABILITIES_KEYMGMT_FT_PSK			(1 << 20)
+
+#define CAPABILITIES_CIPHER_NONE			(1 << 24)
+#define CAPABILITIES_CIPHER_WEP40			(1 << 25)
+#define CAPABILITIES_CIPHER_WEP104			(1 << 26)
+#define CAPABILITIES_CIPHER_TKIP			(1 << 27)
+#define CAPABILITIES_CIPHER_CCMP			(1 << 28)
+
+/* Copied and adapted from wpa_supplicant_ctrl_iface_scan_result and wpa_supplicant_ie_txt*/
+static void wpa_dbus_parse_scan_result_capabilities(
+	const struct wpa_scan_res *res, uint32_t *capabilities)
+{
+	int has_ie = 0;
+	const u8 *ie, *ie2;
+	struct wpa_ie_data data;
+
+	*capabilities = 0;
+
+	ie = wpa_scan_get_vendor_ie(res, WPA_IE_VENDOR_TYPE);
+	if (ie) {
+		*capabilities |= CAPABILITIES_PROTO_WPA;
+		if (wpa_parse_wpa_ie(ie, ie[1] + 2, &data) >= 0) {
+			has_ie = 1;
+		}
+	}
+	ie2 = wpa_scan_get_ie(res, WLAN_EID_RSN);
+	if (ie2) {
+		*capabilities |= CAPABILITIES_PROTO_WPA2;
+		if (wpa_parse_wpa_ie(ie2, ie2[1] + 2, &data) >= 0) {
+			has_ie = 1;
+		}
+	}
+	if (!ie && !ie2 && res->caps & IEEE80211_CAP_PRIVACY) {
+		*capabilities |= CAPABILITIES_PROTO_WEP;
+        *capabilities |= CAPABILITIES_CIPHER_WEP40;
+        *capabilities |= CAPABILITIES_CIPHER_WEP104;
+	}
+	if (res->caps & IEEE80211_CAP_IBSS) {
+		*capabilities |= CAPABILITIES_MODE_ADHOC;
+	}
+	if (res->caps & IEEE80211_CAP_ESS) {
+		*capabilities |= CAPABILITIES_MODE_INFRA;
+	}
+
+	if (!has_ie) {
+		return;
+	}
+
+	if (data.key_mgmt & WPA_KEY_MGMT_IEEE8021X) {
+		*capabilities |= CAPABILITIES_KEYMGMT_EAP;
+	}
+	if (data.key_mgmt & WPA_KEY_MGMT_PSK) {
+		*capabilities |= CAPABILITIES_KEYMGMT_PSK;
+	}
+	if (data.key_mgmt & WPA_KEY_MGMT_WPA_NONE) {
+		*capabilities |= CAPABILITIES_KEYMGMT_WPA_NONE;
+	}
+#ifdef CONFIG_IEEE80211R
+	if (data.key_mgmt & WPA_KEY_MGMT_FT_IEEE8021X) {
+		*capabilities |= CAPABILITIES_KEYMGMT_FT_EAP;
+	}
+	if (data.key_mgmt & WPA_KEY_MGMT_FT_PSK) {
+		*capabilities |= CAPABILITIES_KEYMGMT_FT_PSK;
+	}
+#endif /* CONFIG_IEEE80211R */
+
+	if (data.pairwise_cipher & WPA_CIPHER_NONE) {
+		*capabilities |= CAPABILITIES_CIPHER_NONE;
+	}
+	if (data.pairwise_cipher & WPA_CIPHER_WEP40) {
+		*capabilities |= CAPABILITIES_CIPHER_WEP40;
+	}
+	if (data.pairwise_cipher & WPA_CIPHER_WEP104) {
+		*capabilities |= CAPABILITIES_CIPHER_WEP104;
+	}
+	if (data.pairwise_cipher & WPA_CIPHER_TKIP) {
+		*capabilities |= CAPABILITIES_CIPHER_TKIP;
+	}
+	if (data.pairwise_cipher & WPA_CIPHER_CCMP) {
+		*capabilities |= CAPABILITIES_CIPHER_CCMP;
+	}
+
+	if (data.capabilities & WPA_CAPABILITY_PREAUTH) {
+		*capabilities |= CAPABILITIES_PREAUTH;
+	}
+}
 
 /**
  * wpas_dbus_new_invalid_opts_error - Return a new invalid options error message
@@ -381,6 +481,7 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	DBusMessage *reply = NULL;
 	DBusMessageIter iter, iter_dict;
 	const u8 *ie;
+	uint32_t extended_capabilities;
 
 	/* Dump the properties into a dbus message */
 	reply = dbus_message_new_method_return(message);
@@ -425,6 +526,10 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	}
 	if (!wpa_dbus_dict_append_uint16(&iter_dict, "capabilities",
 					 res->caps))
+		goto error;
+	wpa_dbus_parse_scan_result_capabilities(res, &extended_capabilities);
+	if (!wpa_dbus_dict_append_uint32(&iter_dict, "extended_capabilities",
+					 extended_capabilities))
 		goto error;
 	if (!wpa_dbus_dict_append_int32(&iter_dict, "quality", res->qual))
 		goto error;

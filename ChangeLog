@@ -1,0 +1,10 @@
+WPA Supplicant WYPLAY change log file.
+Created on 02/03/2010
+Last Modification Date: 02/03/2010
+
+0.6.3-1 -- 02/03/2010
+- Fix non-quoted WEP and WPA_PSK keys
+  => Apply wpa_supplicant-0.6.3-dbus_doesnt_quote_wep_key_and_wpa_psk.patch patch
+- Add Extended network capabilities access through DBUS
+  => Apply wpa_supplicant-0.6.3-dbus_provides_extended_network_capabilities.patch patch
+

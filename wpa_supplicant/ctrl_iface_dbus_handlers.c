@@ -856,7 +856,7 @@ out:
 static const char *dont_quote[] = {
 	"key_mgmt", "proto", "pairwise", "auth_alg", "group", "eap",
 	"opensc_engine_path", "pkcs11_engine_path", "pkcs11_module_path",
-	"bssid", NULL
+	"bssid", "wep_key0", "wep_key1", "wep_key2", "wep_key3", "psk", NULL
 };
 
 static dbus_bool_t should_quote_opt(const char *key)

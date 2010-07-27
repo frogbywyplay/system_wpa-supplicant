@@ -246,11 +246,11 @@ struct eap_config {
 	 */
 	const char *pkcs11_module_path;
 	/**
-	 * mac_addr - MAC address of the peer
+	 * wps - WPS context data
 	 *
-	 * This can be left %NULL if not available.
+	 * This is only used by EAP-WSC and can be left %NULL if not available.
 	 */
-	const u8 *mac_addr;
+	struct wps_context *wps;
 };
 
 struct eap_sm * eap_peer_sm_init(void *eapol_ctx,
@@ -282,6 +282,9 @@ const u8 * eap_get_eapKeyData(struct eap_sm *sm, size_t *len);
 struct wpabuf * eap_get_eapRespData(struct eap_sm *sm);
 void eap_register_scard_ctx(struct eap_sm *sm, void *ctx);
 void eap_invalidate_cached_session(struct eap_sm *sm);
+
+int eap_is_wps_pbc_enrollee(struct eap_peer_config *conf);
+int eap_is_wps_pin_enrollee(struct eap_peer_config *conf);
 
 #endif /* IEEE8021X_EAPOL */
 

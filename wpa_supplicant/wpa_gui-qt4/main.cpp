@@ -18,22 +18,48 @@
 #include <QApplication>
 #include "wpagui.h"
 
+
+class WpaGuiApp : public QApplication
+{
+public:
+	WpaGuiApp(int &argc, char **argv);
+
+#ifndef QT_NO_SESSIONMANAGER
+	virtual void saveState(QSessionManager &manager);
+#endif
+
+	WpaGui *w;
+};
+
+WpaGuiApp::WpaGuiApp(int &argc, char **argv) : QApplication(argc, argv)
+{
+}
+
+#ifndef QT_NO_SESSIONMANAGER
+void WpaGuiApp::saveState(QSessionManager &manager)
+{
+	QApplication::saveState(manager);
+	w->saveState();
+}
+#endif
+
+
 int main(int argc, char *argv[])
 {
-	QApplication app(argc, argv);
-	WpaGui w;
+	WpaGuiApp app(argc, argv);
+	WpaGui w(&app);
 	int ret;
 
 #ifdef CONFIG_NATIVE_WINDOWS
 	WSADATA wsaData;
 	if (WSAStartup(MAKEWORD(2, 0), &wsaData)) {
-		printf("Could not find a usable WinSock.dll\n");
+		/* printf("Could not find a usable WinSock.dll\n"); */
 		return -1;
 	}
 #endif /* CONFIG_NATIVE_WINDOWS */
 
-	w.show();
-	app.connect(&app, SIGNAL(lastWindowClosed()), &app, SLOT(quit()));
+	app.w = &w;
+
 	ret = app.exec();
 
 #ifdef CONFIG_NATIVE_WINDOWS

@@ -31,6 +31,7 @@
 #include "pcsc_funcs.h"
 #include "wpa_ctrl.h"
 #include "state_machine.h"
+#include "eap_common/eap_wsc_common.h"
 
 #define STATE_MACHINE_DATA struct eap_sm
 #define STATE_MACHINE_DEBUG_PREFIX "EAP"
@@ -105,7 +106,7 @@ static void eap_deinit_prev_method(struct eap_sm *sm, const char *txt)
  * @method: EAP type
  * Returns: 1 = allowed EAP method, 0 = not allowed
  */
-static int eap_allowed_method(struct eap_sm *sm, int vendor, u32 method)
+int eap_allowed_method(struct eap_sm *sm, int vendor, u32 method)
 {
 	struct eap_peer_config *config = eap_get_config(sm);
 	int i;
@@ -133,7 +134,8 @@ SM_STATE(EAP, INITIALIZE)
 {
 	SM_ENTRY(EAP, INITIALIZE);
 	if (sm->fast_reauth && sm->m && sm->m->has_reauth_data &&
-	    sm->m->has_reauth_data(sm, sm->eap_method_priv)) {
+	    sm->m->has_reauth_data(sm, sm->eap_method_priv) &&
+	    !sm->prev_failure) {
 		wpa_printf(MSG_DEBUG, "EAP: maintaining EAP method data for "
 			   "fast reauthentication");
 		sm->m->deinit_for_reauth(sm, sm->eap_method_priv);
@@ -164,6 +166,7 @@ SM_STATE(EAP, INITIALIZE)
 	eapol_set_bool(sm, EAPOL_eapResp, FALSE);
 	eapol_set_bool(sm, EAPOL_eapNoResp, FALSE);
 	sm->num_rounds = 0;
+	sm->prev_failure = 0;
 }
 
 
@@ -504,6 +507,8 @@ SM_STATE(EAP, FAILURE)
 
 	wpa_msg(sm->msg_ctx, MSG_INFO, WPA_EVENT_EAP_FAILURE
 		"EAP authentication failed");
+
+	sm->prev_failure = 1;
 }
 
 
@@ -906,8 +911,8 @@ static int eap_sm_imsi_identity(struct eap_sm *sm,
 #endif /* PCSC_FUNCS */
 
 
-static int eap_sm_get_scard_identity(struct eap_sm *sm,
-				     struct eap_peer_config *conf)
+static int eap_sm_set_scard_pin(struct eap_sm *sm,
+				struct eap_peer_config *conf)
 {
 #ifdef PCSC_FUNCS
 	if (scard_set_pin(sm->scard_ctx, conf->pin)) {
@@ -922,6 +927,18 @@ static int eap_sm_get_scard_identity(struct eap_sm *sm,
 		eap_sm_request_pin(sm);
 		return -1;
 	}
+	return 0;
+#else /* PCSC_FUNCS */
+	return -1;
+#endif /* PCSC_FUNCS */
+}
+
+static int eap_sm_get_scard_identity(struct eap_sm *sm,
+				     struct eap_peer_config *conf)
+{
+#ifdef PCSC_FUNCS
+	if (eap_sm_set_scard_pin(sm, conf))
+		return -1;
 
 	return eap_sm_imsi_identity(sm, conf);
 #else /* PCSC_FUNCS */
@@ -985,6 +1002,9 @@ struct wpabuf * eap_sm_buildIdentity(struct eap_sm *sm, int id, int encrypted)
 			eap_sm_request_identity(sm);
 			return NULL;
 		}
+	} else if (config->pcsc) {
+		if (eap_sm_set_scard_pin(sm, config) < 0)
+			return NULL;
 	}
 
 	resp = eap_msg_alloc(EAP_VENDOR_IETF, EAP_TYPE_IDENTITY, identity_len,
@@ -1162,8 +1182,7 @@ struct eap_sm * eap_peer_sm_init(void *eapol_ctx,
 	sm->eapol_cb = eapol_cb;
 	sm->msg_ctx = msg_ctx;
 	sm->ClientTimeout = 60;
-	if (conf->mac_addr)
-		os_memcpy(sm->mac_addr, conf->mac_addr, ETH_ALEN);
+	sm->wps = conf->wps;
 
 	os_memset(&tlsconf, 0, sizeof(tlsconf));
 	tlsconf.opensc_engine_path = conf->opensc_engine_path;
@@ -2027,4 +2046,30 @@ void eap_invalidate_cached_session(struct eap_sm *sm)
 {
 	if (sm)
 		eap_deinit_prev_method(sm, "invalidate");
+}
+
+
+int eap_is_wps_pbc_enrollee(struct eap_peer_config *conf)
+{
+	if (conf->identity_len != WSC_ID_ENROLLEE_LEN ||
+	    os_memcmp(conf->identity, WSC_ID_ENROLLEE, WSC_ID_ENROLLEE_LEN))
+		return 0; /* Not a WPS Enrollee */
+
+	if (conf->phase1 == NULL || os_strstr(conf->phase1, "pbc=1") == NULL)
+		return 0; /* Not using PBC */
+
+	return 1;
+}
+
+
+int eap_is_wps_pin_enrollee(struct eap_peer_config *conf)
+{
+	if (conf->identity_len != WSC_ID_ENROLLEE_LEN ||
+	    os_memcmp(conf->identity, WSC_ID_ENROLLEE, WSC_ID_ENROLLEE_LEN))
+		return 0; /* Not a WPS Enrollee */
+
+	if (conf->phase1 == NULL || os_strstr(conf->phase1, "pin=") == NULL)
+		return 0; /* Not using PIN */
+
+	return 1;
 }

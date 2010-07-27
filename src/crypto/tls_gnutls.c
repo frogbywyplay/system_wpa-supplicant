@@ -35,8 +35,12 @@ int gnutls_ia_verify_endphase(gnutls_session_t session, char *checksum);
 #include "tls.h"
 
 
+#ifndef TLS_RANDOM_SIZE
 #define TLS_RANDOM_SIZE 32
+#endif
+#ifndef TLS_MASTER_SIZE
 #define TLS_MASTER_SIZE 48
+#endif
 
 
 #if LIBGNUTLS_VERSION_NUMBER < 0x010302
@@ -254,8 +258,9 @@ static ssize_t tls_pull_func(gnutls_transport_ptr ptr, void *buf,
 		conn->pull_buf = conn->pull_buf_offset = NULL;
 		conn->pull_buf_len = 0;
 	} else {
-		wpa_printf(MSG_DEBUG, "%s - %d bytes remaining in pull_buf",
-			   __func__, end - conn->pull_buf_offset);
+		wpa_printf(MSG_DEBUG, "%s - %lu bytes remaining in pull_buf",
+			   __func__,
+			   (unsigned long) (end - conn->pull_buf_offset));
 	}
 	return len;
 }
@@ -590,6 +595,17 @@ int tls_connection_set_params(void *tls_ctx, struct tls_connection *conn,
 				return -1;
 			}
 		}
+
+		if (params->flags & TLS_CONN_ALLOW_SIGN_RSA_MD5) {
+			gnutls_certificate_set_verify_flags(
+				conn->xcred, GNUTLS_VERIFY_ALLOW_SIGN_RSA_MD5);
+		}
+
+		if (params->flags & TLS_CONN_DISABLE_TIME_CHECKS) {
+			gnutls_certificate_set_verify_flags(
+				conn->xcred,
+				GNUTLS_VERIFY_DISABLE_TIME_CHECKS);
+		}
 	}
 
 	if (params->client_cert && params->private_key) {
@@ -709,6 +725,18 @@ int tls_global_set_params(void *tls_ctx,
 					   gnutls_strerror(ret));
 				goto fail;
 			}
+		}
+
+		if (params->flags & TLS_CONN_ALLOW_SIGN_RSA_MD5) {
+			gnutls_certificate_set_verify_flags(
+				global->xcred,
+				GNUTLS_VERIFY_ALLOW_SIGN_RSA_MD5);
+		}
+
+		if (params->flags & TLS_CONN_DISABLE_TIME_CHECKS) {
+			gnutls_certificate_set_verify_flags(
+				global->xcred,
+				GNUTLS_VERIFY_DISABLE_TIME_CHECKS);
 		}
 	}
 
@@ -842,7 +870,8 @@ int tls_connection_prf(void *tls_ctx, struct tls_connection *conn,
 }
 
 
-static int tls_connection_verify_peer(struct tls_connection *conn)
+static int tls_connection_verify_peer(struct tls_connection *conn,
+				      gnutls_alert_description_t *err)
 {
 	unsigned int status, num_certs, i;
 	struct os_time now;
@@ -852,22 +881,39 @@ static int tls_connection_verify_peer(struct tls_connection *conn)
 	if (gnutls_certificate_verify_peers2(conn->session, &status) < 0) {
 		wpa_printf(MSG_INFO, "TLS: Failed to verify peer "
 			   "certificate chain");
+		*err = GNUTLS_A_INTERNAL_ERROR;
 		return -1;
 	}
 
 	if (conn->verify_peer && (status & GNUTLS_CERT_INVALID)) {
 		wpa_printf(MSG_INFO, "TLS: Peer certificate not trusted");
+		if (status & GNUTLS_CERT_INSECURE_ALGORITHM) {
+			wpa_printf(MSG_INFO, "TLS: Certificate uses insecure "
+				   "algorithm");
+			*err = GNUTLS_A_INSUFFICIENT_SECURITY;
+		}
+		if (status & GNUTLS_CERT_NOT_ACTIVATED) {
+			wpa_printf(MSG_INFO, "TLS: Certificate not yet "
+				   "activated");
+			*err = GNUTLS_A_CERTIFICATE_EXPIRED;
+		}
+		if (status & GNUTLS_CERT_EXPIRED) {
+			wpa_printf(MSG_INFO, "TLS: Certificate expired");
+			*err = GNUTLS_A_CERTIFICATE_EXPIRED;
+		}
 		return -1;
 	}
 
 	if (status & GNUTLS_CERT_SIGNER_NOT_FOUND) {
 		wpa_printf(MSG_INFO, "TLS: Peer certificate does not have a "
 			   "known issuer");
+		*err = GNUTLS_A_UNKNOWN_CA;
 		return -1;
 	}
 
 	if (status & GNUTLS_CERT_REVOKED) {
 		wpa_printf(MSG_INFO, "TLS: Peer certificate has been revoked");
+		*err = GNUTLS_A_CERTIFICATE_REVOKED;
 		return -1;
 	}
 
@@ -877,6 +923,7 @@ static int tls_connection_verify_peer(struct tls_connection *conn)
 	if (certs == NULL) {
 		wpa_printf(MSG_INFO, "TLS: No peer certificate chain "
 			   "received");
+		*err = GNUTLS_A_UNKNOWN_CA;
 		return -1;
 	}
 
@@ -886,6 +933,7 @@ static int tls_connection_verify_peer(struct tls_connection *conn)
 		if (gnutls_x509_crt_init(&cert) < 0) {
 			wpa_printf(MSG_INFO, "TLS: Certificate initialization "
 				   "failed");
+			*err = GNUTLS_A_BAD_CERTIFICATE;
 			return -1;
 		}
 
@@ -894,6 +942,7 @@ static int tls_connection_verify_peer(struct tls_connection *conn)
 			wpa_printf(MSG_INFO, "TLS: Could not parse peer "
 				   "certificate %d/%d", i + 1, num_certs);
 			gnutls_x509_crt_deinit(cert);
+			*err = GNUTLS_A_BAD_CERTIFICATE;
 			return -1;
 		}
 
@@ -919,6 +968,7 @@ static int tls_connection_verify_peer(struct tls_connection *conn)
 				   "not valid at this time",
 				   i + 1, num_certs);
 			gnutls_x509_crt_deinit(cert);
+			*err = GNUTLS_A_CERTIFICATE_EXPIRED;
 			return -1;
 		}
 
@@ -943,8 +993,9 @@ u8 * tls_connection_handshake(void *ssl_ctx, struct tls_connection *conn,
 
 	if (in_data && in_len) {
 		if (conn->pull_buf) {
-			wpa_printf(MSG_DEBUG, "%s - %d bytes remaining in "
-				   "pull_buf", __func__, conn->pull_buf_len);
+			wpa_printf(MSG_DEBUG, "%s - %lu bytes remaining in "
+				   "pull_buf", __func__,
+				   (unsigned long) conn->pull_buf_len);
 			os_free(conn->pull_buf);
 		}
 		conn->pull_buf = os_malloc(in_len);
@@ -979,19 +1030,24 @@ u8 * tls_connection_handshake(void *ssl_ctx, struct tls_connection *conn,
 		}
 	} else {
 		size_t size;
+		gnutls_alert_description_t err;
 
-		if (conn->verify_peer && tls_connection_verify_peer(conn)) {
+		if (conn->verify_peer &&
+		    tls_connection_verify_peer(conn, &err)) {
 			wpa_printf(MSG_INFO, "TLS: Peer certificate chain "
 				   "failed validation");
 			conn->failed++;
-			return NULL;
+			gnutls_alert_send(conn->session, GNUTLS_AL_FATAL, err);
+			goto out;
 		}
 
+#ifdef CONFIG_GNUTLS_EXTRA
 		if (conn->tls_ia && !gnutls_ia_handshake_p(conn->session)) {
 			wpa_printf(MSG_INFO, "TLS: No TLS/IA negotiation");
 			conn->failed++;
 			return NULL;
 		}
+#endif /* CONFIG_GNUTLS_EXTRA */
 
 		if (conn->tls_ia)
 			wpa_printf(MSG_DEBUG, "TLS: Start TLS/IA handshake");
@@ -1019,6 +1075,7 @@ u8 * tls_connection_handshake(void *ssl_ctx, struct tls_connection *conn,
 		}
 	}
 
+out:
 	out_data = conn->push_buf;
 	*out_len = conn->push_buf_len;
 	conn->push_buf = NULL;
@@ -1058,6 +1115,14 @@ int tls_connection_encrypt(void *ssl_ctx, struct tls_connection *conn,
 		return -1;
 	if (conn->push_buf_len < out_len)
 		out_len = conn->push_buf_len;
+	else if (conn->push_buf_len > out_len) {
+		wpa_printf(MSG_INFO, "GnuTLS: Not enough buffer space for "
+			   "encrypted message (in_len=%lu push_buf_len=%lu "
+			   "out_len=%lu",
+			   (unsigned long) in_len,
+			   (unsigned long) conn->push_buf_len,
+			   (unsigned long) out_len);
+	}
 	os_memcpy(out_data, conn->push_buf, out_len);
 	os_free(conn->push_buf);
 	conn->push_buf = NULL;
@@ -1073,8 +1138,9 @@ int tls_connection_decrypt(void *ssl_ctx, struct tls_connection *conn,
 	ssize_t res;
 
 	if (conn->pull_buf) {
-		wpa_printf(MSG_DEBUG, "%s - %d bytes remaining in "
-			   "pull_buf", __func__, conn->pull_buf_len);
+		wpa_printf(MSG_DEBUG, "%s - %lu bytes remaining in "
+			   "pull_buf", __func__,
+			   (unsigned long) conn->pull_buf_len);
 		os_free(conn->pull_buf);
 	}
 	conn->pull_buf = os_malloc(in_len);
@@ -1132,7 +1198,7 @@ int tls_connection_decrypt(void *ssl_ctx, struct tls_connection *conn,
 
 		if (res < 0) {
 			wpa_printf(MSG_DEBUG, "%s - gnutls_ia_recv failed: %d "
-				   "(%s)", __func__, res,
+				   "(%s)", __func__, (int) res,
 				   gnutls_strerror(res));
 		}
 		return res;
@@ -1142,7 +1208,7 @@ int tls_connection_decrypt(void *ssl_ctx, struct tls_connection *conn,
 	res = gnutls_record_recv(conn->session, out_data, out_len);
 	if (res < 0) {
 		wpa_printf(MSG_DEBUG, "%s - gnutls_record_recv failed: %d "
-			   "(%s)", __func__, res, gnutls_strerror(res));
+			   "(%s)", __func__, (int) res, gnutls_strerror(res));
 	}
 
 	return res;

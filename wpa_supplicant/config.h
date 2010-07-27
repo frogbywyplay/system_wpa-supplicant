@@ -154,7 +154,7 @@ struct wpa_config {
 	 * ctrl_interface_group - Control interface group (DEPRECATED)
 	 *
 	 * This variable is only used for backwards compatibility. Group for
-	 * UNIX domain sockets should now be specified using GROUP=<group> in
+	 * UNIX domain sockets should now be specified using GROUP=group in
 	 * ctrl_interface variable.
 	 */
 	char *ctrl_interface_group;
@@ -247,6 +247,82 @@ struct wpa_config {
 	 * blobs - Configuration blobs
 	 */
 	struct wpa_config_blob *blobs;
+
+	/**
+	 * uuid - Universally Unique IDentifier (UUID; see RFC 4122) for WPS
+	 */
+	u8 uuid[16];
+
+	/**
+	 * device_name - Device Name (WPS)
+	 * User-friendly description of device; up to 32 octets encoded in
+	 * UTF-8
+	 */
+	char *device_name;
+
+	/**
+	 * manufacturer - Manufacturer (WPS)
+	 * The manufacturer of the device (up to 64 ASCII characters)
+	 */
+	char *manufacturer;
+
+	/**
+	 * model_name - Model Name (WPS)
+	 * Model of the device (up to 32 ASCII characters)
+	 */
+	char *model_name;
+
+	/**
+	 * model_number - Model Number (WPS)
+	 * Additional device description (up to 32 ASCII characters)
+	 */
+	char *model_number;
+
+	/**
+	 * serial_number - Serial Number (WPS)
+	 * Serial number of the device (up to 32 characters)
+	 */
+	char *serial_number;
+
+	/**
+	 * device_type - Primary Device Type (WPS)
+	 * Used format: categ-OUI-subcateg
+	 * categ = Category as an integer value
+	 * OUI = OUI and type octet as a 4-octet hex-encoded value;
+	 *	0050F204 for default WPS OUI
+	 * subcateg = OUI-specific Sub Category as an integer value
+	 * Examples:
+	 *   1-0050F204-1 (Computer / PC)
+	 *   1-0050F204-2 (Computer / Server)
+	 *   5-0050F204-1 (Storage / NAS)
+	 *   6-0050F204-1 (Network Infrastructure / AP)
+	 */
+	char *device_type;
+
+	/**
+	 * os_version - OS Version (WPS)
+	 * 4-octet operating system version number
+	 */
+	u8 os_version[4];
+
+	/**
+	 * country - Country code
+	 *
+	 * This is the ISO/IEC alpha2 country code for which we are operating
+	 * in
+	 */
+	char country[2];
+
+	/**
+	 * wps_cred_processing - Credential processing
+	 *
+	 *   0 = process received credentials internally
+	 *   1 = do not process received credentials; just pass them over
+	 *	ctrl_iface to external program(s)
+	 *   2 = process received credentials internally and pass them over
+	 *	ctrl_iface to external program(s)
+	 */
+	int wps_cred_processing;
 };
 
 

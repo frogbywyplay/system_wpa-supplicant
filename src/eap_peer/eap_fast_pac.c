@@ -555,7 +555,12 @@ static int eap_fast_write_pac(struct eap_sm *sm, const char *pac_file,
 				   "file '%s' for writing", pac_file);
 			return -1;
 		}
-		fwrite(buf, 1, len, f);
+		if (fwrite(buf, 1, len, f) != len) {
+			wpa_printf(MSG_INFO, "EAP-FAST: Failed to write all "
+				   "PACs into '%s'", pac_file);
+			fclose(f);
+			return -1;
+		}
 		os_free(buf);
 		fclose(f);
 	}
@@ -834,8 +839,8 @@ int eap_fast_load_pac_bin(struct eap_sm *sm, struct eap_fast_pac **pac_root,
 	if (blob == NULL)
 		os_free(buf);
 
-	wpa_printf(MSG_DEBUG, "EAP-FAST: Read %d PAC entries from '%s' (bin)",
-		   count, pac_file);
+	wpa_printf(MSG_DEBUG, "EAP-FAST: Read %lu PAC entries from '%s' (bin)",
+		   (unsigned long) count, pac_file);
 
 	return 0;
 
@@ -909,8 +914,8 @@ int eap_fast_save_pac_bin(struct eap_sm *sm, struct eap_fast_pac *pac_root,
 		return -1;
 	}
 
-	wpa_printf(MSG_DEBUG, "EAP-FAST: Wrote %d PAC entries into '%s' (bin)",
-		   count, pac_file);
+	wpa_printf(MSG_DEBUG, "EAP-FAST: Wrote %lu PAC entries into '%s' "
+		   "(bin)", (unsigned long) count, pac_file);
 
 	return 0;
 }

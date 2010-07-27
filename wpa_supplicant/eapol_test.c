@@ -38,6 +38,13 @@ extern int wpa_debug_show_keys;
 struct wpa_driver_ops *wpa_supplicant_drivers[] = { NULL };
 
 
+struct extra_radius_attr {
+	u8 type;
+	char syntax;
+	char *data;
+	struct extra_radius_attr *next;
+};
+
 struct eapol_test_data {
 	struct wpa_supplicant *wpa_s;
 
@@ -66,6 +73,7 @@ struct eapol_test_data {
 
 	char *connect_info;
 	u8 own_addr[ETH_ALEN];
+	struct extra_radius_attr *extra_attrs;
 };
 
 static struct eapol_test_data eapol_test;
@@ -82,6 +90,81 @@ static void hostapd_logger_cb(void *ctx, const u8 *addr, unsigned int module,
 			   MAC2STR(addr), txt);
 	else
 		wpa_printf(MSG_DEBUG, "%s", txt);
+}
+
+
+static int add_extra_attr(struct radius_msg *msg,
+			  struct extra_radius_attr *attr)
+{
+	size_t len;
+	char *pos;
+	u32 val;
+	char buf[128];
+
+	switch (attr->syntax) {
+	case 's':
+		os_snprintf(buf, sizeof(buf), "%s", attr->data);
+		len = os_strlen(buf);
+		break;
+	case 'n':
+		buf[0] = '\0';
+		len = 1;
+		break;
+	case 'x':
+		pos = attr->data;
+		if (pos[0] == '0' && pos[1] == 'x')
+			pos += 2;
+		len = os_strlen(pos);
+		if ((len & 1) || (len / 2) > sizeof(buf)) {
+			printf("Invalid extra attribute hexstring\n");
+			return -1;
+		}
+		len /= 2;
+		if (hexstr2bin(pos, (u8 *) buf, len) < 0) {
+			printf("Invalid extra attribute hexstring\n");
+			return -1;
+		}
+		break;
+	case 'd':
+		val = htonl(atoi(attr->data));
+		os_memcpy(buf, &val, 4);
+		len = 4;
+		break;
+	default:
+		printf("Incorrect extra attribute syntax specification\n");
+		return -1;
+	}
+
+	if (!radius_msg_add_attr(msg, attr->type, (u8 *) buf, len)) {
+		printf("Could not add attribute %d\n", attr->type);
+		return -1;
+	}
+
+	return 0;
+}
+
+
+static int add_extra_attrs(struct radius_msg *msg,
+			   struct extra_radius_attr *attrs)
+{
+	struct extra_radius_attr *p;
+	for (p = attrs; p; p = p->next) {
+		if (add_extra_attr(msg, p) < 0)
+			return -1;
+	}
+	return 0;
+}
+
+
+static struct extra_radius_attr *
+find_extra_attr(struct extra_radius_attr *attrs, u8 type)
+{
+	struct extra_radius_attr *p;
+	for (p = attrs; p; p = p->next) {
+		if (p->type == type)
+			return p;
+	}
+	return NULL;
 }
 
 
@@ -129,7 +212,8 @@ static void ieee802_1x_encapsulate_radius(struct eapol_test_data *e,
 		goto fail;
 	}
 
-	if (!radius_msg_add_attr(msg, RADIUS_ATTR_NAS_IP_ADDRESS,
+	if (!find_extra_attr(e->extra_attrs, RADIUS_ATTR_NAS_IP_ADDRESS) &&
+	    !radius_msg_add_attr(msg, RADIUS_ATTR_NAS_IP_ADDRESS,
 				 (u8 *) &e->own_ip_addr, 4)) {
 		printf("Could not add NAS-IP-Address\n");
 		goto fail;
@@ -137,7 +221,9 @@ static void ieee802_1x_encapsulate_radius(struct eapol_test_data *e,
 
 	os_snprintf(buf, sizeof(buf), RADIUS_802_1X_ADDR_FORMAT,
 		    MAC2STR(e->wpa_s->own_addr));
-	if (!radius_msg_add_attr(msg, RADIUS_ATTR_CALLING_STATION_ID,
+	if (!find_extra_attr(e->extra_attrs, RADIUS_ATTR_CALLING_STATION_ID)
+	    &&
+	    !radius_msg_add_attr(msg, RADIUS_ATTR_CALLING_STATION_ID,
 				 (u8 *) buf, os_strlen(buf))) {
 		printf("Could not add Calling-Station-Id\n");
 		goto fail;
@@ -146,23 +232,29 @@ static void ieee802_1x_encapsulate_radius(struct eapol_test_data *e,
 	/* TODO: should probably check MTU from driver config; 2304 is max for
 	 * IEEE 802.11, but use 1400 to avoid problems with too large packets
 	 */
-	if (!radius_msg_add_attr_int32(msg, RADIUS_ATTR_FRAMED_MTU, 1400)) {
+	if (!find_extra_attr(e->extra_attrs, RADIUS_ATTR_FRAMED_MTU) &&
+	    !radius_msg_add_attr_int32(msg, RADIUS_ATTR_FRAMED_MTU, 1400)) {
 		printf("Could not add Framed-MTU\n");
 		goto fail;
 	}
 
-	if (!radius_msg_add_attr_int32(msg, RADIUS_ATTR_NAS_PORT_TYPE,
+	if (!find_extra_attr(e->extra_attrs, RADIUS_ATTR_NAS_PORT_TYPE) &&
+	    !radius_msg_add_attr_int32(msg, RADIUS_ATTR_NAS_PORT_TYPE,
 				       RADIUS_NAS_PORT_TYPE_IEEE_802_11)) {
 		printf("Could not add NAS-Port-Type\n");
 		goto fail;
 	}
 
 	os_snprintf(buf, sizeof(buf), "%s", e->connect_info);
-	if (!radius_msg_add_attr(msg, RADIUS_ATTR_CONNECT_INFO,
+	if (!find_extra_attr(e->extra_attrs, RADIUS_ATTR_CONNECT_INFO) &&
+	    !radius_msg_add_attr(msg, RADIUS_ATTR_CONNECT_INFO,
 				 (u8 *) buf, os_strlen(buf))) {
 		printf("Could not add Connect-Info\n");
 		goto fail;
 	}
+
+	if (add_extra_attrs(msg, e->extra_attrs) < 0)
+		goto fail;
 
 	if (eap && !radius_msg_add_eap(msg, eap, len)) {
 		printf("Could not add EAP-Message\n");
@@ -346,6 +438,8 @@ static int test_eapol(struct eapol_test_data *e, struct wpa_supplicant *wpa_s,
 static void test_eapol_clean(struct eapol_test_data *e,
 			     struct wpa_supplicant *wpa_s)
 {
+	struct extra_radius_attr *p, *prev;
+
 	radius_client_deinit(e->radius);
 	os_free(e->last_eap_radius);
 	if (e->last_recv_radius) {
@@ -368,6 +462,13 @@ static void test_eapol_clean(struct eapol_test_data *e,
 		wpa_s->ctrl_iface = NULL;
 	}
 	wpa_config_free(wpa_s->conf);
+
+	p = e->extra_attrs;
+	while (p) {
+		prev = p;
+		p = p->next;
+		os_free(prev);
+	}
 }
 
 
@@ -516,7 +617,8 @@ static void ieee802_1x_decapsulate_radius(struct eapol_test_data *e)
 
 static void ieee802_1x_get_keys(struct eapol_test_data *e,
 				struct radius_msg *msg, struct radius_msg *req,
-				u8 *shared_secret, size_t shared_secret_len)
+				const u8 *shared_secret,
+				size_t shared_secret_len)
 {
 	struct radius_ms_mppe_keys *keys;
 
@@ -541,6 +643,16 @@ static void ieee802_1x_get_keys(struct eapol_test_data *e,
 				keys->recv_len;
 			os_memcpy(e->authenticator_pmk, keys->recv,
 				  e->authenticator_pmk_len);
+			if (e->authenticator_pmk_len == 16 && keys->send &&
+			    keys->send_len == 16) {
+				/* MS-CHAP-v2 derives 16 octet keys */
+				wpa_printf(MSG_DEBUG, "Use MS-MPPE-Send-Key "
+					   "to extend PMK to 32 octets");
+				os_memcpy(e->authenticator_pmk +
+					  e->authenticator_pmk_len,
+					  keys->send, keys->send_len);
+				e->authenticator_pmk_len += keys->send_len;
+			}
 		}
 
 		os_free(keys->send);
@@ -553,7 +665,7 @@ static void ieee802_1x_get_keys(struct eapol_test_data *e,
 /* Process the RADIUS frames from Authentication Server */
 static RadiusRxResult
 ieee802_1x_receive_auth(struct radius_msg *msg, struct radius_msg *req,
-			u8 *shared_secret, size_t shared_secret_len,
+			const u8 *shared_secret, size_t shared_secret_len,
 			void *data)
 {
 	struct eapol_test_data *e = data;
@@ -616,7 +728,8 @@ ieee802_1x_receive_auth(struct radius_msg *msg, struct radius_msg *req,
 
 static void wpa_init_conf(struct eapol_test_data *e,
 			  struct wpa_supplicant *wpa_s, const char *authsrv,
-			  int port, const char *secret)
+			  int port, const char *secret,
+			  const char *cli_addr)
 {
 	struct hostapd_radius_server *as;
 	int res;
@@ -652,6 +765,16 @@ static void wpa_init_conf(struct eapol_test_data *e,
 	e->radius_conf->auth_server = as;
 	e->radius_conf->auth_servers = as;
 	e->radius_conf->msg_dumps = 1;
+	if (cli_addr) {
+		if (hostapd_parse_ip_addr(cli_addr,
+					  &e->radius_conf->client_addr) == 0)
+			e->radius_conf->force_client_addr = 1;
+		else {
+			wpa_printf(MSG_ERROR, "Invalid IP address '%s'",
+				   cli_addr);
+			assert(0);
+		}
+	}
 
 	e->radius = radius_client_init(wpa_s, e->radius_conf);
 	assert(e->radius != NULL);
@@ -846,9 +969,11 @@ static void usage(void)
 {
 	printf("usage:\n"
 	       "eapol_test [-nWS] -c<conf> [-a<AS IP>] [-p<AS port>] "
-	       "[-s<AS secret>] \\\n"
+	       "[-s<AS secret>]\\\n"
 	       "           [-r<count>] [-t<timeout>] [-C<Connect-Info>] \\\n"
-	       "           [-M<client MAC address>]\n"
+	       "           [-M<client MAC address>] \\\n"
+	       "           [-N<attr spec>] \\\n"
+	       "           [-A<client IP>]\n"
 	       "eapol_test scard\n"
 	       "eapol_test sim <PIN> <num triplets> [debug]\n"
 	       "\n");
@@ -860,16 +985,30 @@ static void usage(void)
 	       "default 1812\n"
 	       "  -s<AS secret> = shared secret with the authentication "
 	       "server, default 'radius'\n"
+	       "  -A<client IP> = IP address of the client, default: select "
+	       "automatically\n"
 	       "  -r<count> = number of re-authentications\n"
 	       "  -W = wait for a control interface monitor before starting\n"
-	       "  -S = save configuration after authentiation\n"
+	       "  -S = save configuration after authentication\n"
 	       "  -n = no MPPE keys expected\n"
 	       "  -t<timeout> = sets timeout in seconds (default: 30 s)\n"
 	       "  -C<Connect-Info> = RADIUS Connect-Info (default: "
 	       "CONNECT 11Mbps 802.11b)\n"
 	       "  -M<client MAC address> = Set own MAC address "
 	       "(Calling-Station-Id,\n"
-	       "                           default: 02:00:00:00:00:01)\n");
+	       "                           default: 02:00:00:00:00:01)\n"
+	       "  -N<attr spec> = send arbitrary attribute specified by:\n"
+	       "                  attr_id:syntax:value or attr_id\n"
+	       "                  attr_id - number id of the attribute\n"
+	       "                  syntax - one of: s, d, x\n"
+	       "                     s = string\n"
+	       "                     d = integer\n"
+	       "                     x = octet string\n"
+	       "                  value - attribute value.\n"
+	       "       When only attr_id is specified, NULL will be used as "
+	       "value.\n"
+	       "       Multiple attributes can be specified by using the "
+	       "option several times.\n");
 }
 
 
@@ -880,8 +1019,11 @@ int main(int argc, char *argv[])
 	char *as_addr = "127.0.0.1";
 	int as_port = 1812;
 	char *as_secret = "radius";
+	char *cli_addr = NULL;
 	char *conf = NULL;
 	int timeout = 30;
+	char *pos;
+	struct extra_radius_attr *p = NULL, *p1;
 
 	if (os_program_init())
 		return -1;
@@ -896,12 +1038,15 @@ int main(int argc, char *argv[])
 	wpa_debug_show_keys = 1;
 
 	for (;;) {
-		c = getopt(argc, argv, "a:c:C:M:np:r:s:St:W");
+		c = getopt(argc, argv, "a:A:c:C:M:nN:p:r:s:St:W");
 		if (c < 0)
 			break;
 		switch (c) {
 		case 'a':
 			as_addr = optarg;
+			break;
+		case 'A':
+			cli_addr = optarg;
 			break;
 		case 'c':
 			conf = optarg;
@@ -935,6 +1080,34 @@ int main(int argc, char *argv[])
 			break;
 		case 'W':
 			wait_for_monitor++;
+			break;
+		case 'N':
+			p1 = os_zalloc(sizeof(p1));
+			if (p1 == NULL)
+				break;
+			if (!p)
+				eapol_test.extra_attrs = p1;
+			else
+				p->next = p1;
+			p = p1;
+
+			p->type = atoi(optarg);
+			pos = os_strchr(optarg, ':');
+			if (pos == NULL) {
+				p->syntax = 'n';
+				p->data = NULL;
+				break;
+			}
+
+			pos++;
+			if (pos[0] == '\0' || pos[1] != ':') {
+				printf("Incorrect format of attribute "
+				       "specification\n");
+				break;
+			}
+
+			p->syntax = pos[0];
+			p->data = pos + 2;
 			break;
 		default:
 			usage();
@@ -979,7 +1152,8 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	wpa_init_conf(&eapol_test, &wpa_s, as_addr, as_port, as_secret);
+	wpa_init_conf(&eapol_test, &wpa_s, as_addr, as_port, as_secret,
+		      cli_addr);
 	wpa_s.ctrl_iface = wpa_supplicant_ctrl_iface_init(&wpa_s);
 	if (wpa_s.ctrl_iface == NULL) {
 		printf("Failed to initialize control interface '%s'.\n"

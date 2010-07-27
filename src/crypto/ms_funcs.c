@@ -110,7 +110,7 @@ void challenge_response(const u8 *challenge, const u8 *password_hash,
 /**
  * generate_nt_response - GenerateNTResponse() - RFC 2759, Sect. 8.1
  * @auth_challenge: 16-octet AuthenticatorChallenge (IN)
- * @peer_hallenge: 16-octet PeerChallenge (IN)
+ * @peer_challenge: 16-octet PeerChallenge (IN)
  * @username: 0-to-256-char UserName (IN)
  * @username_len: Length of username
  * @password: 0-to-256-unicode-char Password (IN; ASCII)
@@ -135,7 +135,7 @@ void generate_nt_response(const u8 *auth_challenge, const u8 *peer_challenge,
 /**
  * generate_nt_response_pwhash - GenerateNTResponse() - RFC 2759, Sect. 8.1
  * @auth_challenge: 16-octet AuthenticatorChallenge (IN)
- * @peer_hallenge: 16-octet PeerChallenge (IN)
+ * @peer_challenge: 16-octet PeerChallenge (IN)
  * @username: 0-to-256-char UserName (IN)
  * @username_len: Length of username
  * @password_hash: 16-octet PasswordHash (IN)
@@ -164,7 +164,7 @@ void generate_nt_response_pwhash(const u8 *auth_challenge,
  * @username: 0-to-256-char UserName (IN)
  * @username_len: Length of username
  * @response: 20-octet AuthenticatorResponse (OUT) (note: this value is usually
- * encoded as a 42-octet ASCII string (S=<hexdump of response>)
+ * encoded as a 42-octet ASCII string (S=hexdump_of_response)
  */
 void generate_authenticator_response_pwhash(
 	const u8 *password_hash,
@@ -219,7 +219,7 @@ void generate_authenticator_response_pwhash(
  * @username: 0-to-256-char UserName (IN)
  * @username_len: Length of username
  * @response: 20-octet AuthenticatorResponse (OUT) (note: this value is usually
- * encoded as a 42-octet ASCII string (S=<hexdump of response>)
+ * encoded as a 42-octet ASCII string (S=hexdump_of_response)
  */
 void generate_authenticator_response(const u8 *password, size_t password_len,
 				     const u8 *peer_challenge,
@@ -379,7 +379,7 @@ int encrypt_pw_block_with_password_hash(
 	 */
 	pos = &pw_block[2 * 256];
 	WPA_PUT_LE16(pos, password_len * 2);
-	rc4(pw_block, PWBLOCK_LEN, password_hash, 16);
+	rc4_skip(password_hash, 16, 0, pw_block, PWBLOCK_LEN);
 	return 0;
 }
 
@@ -429,7 +429,7 @@ void nt_password_hash_encrypted_with_block(const u8 *password_hash,
  * @new_password_len: Length of new_password
  * @old_password: 0-to-256-unicode-char OldPassword (IN; ASCII)
  * @old_password_len: Length of old_password
- * @encrypted_password_ash: 16-octet EncryptedPasswordHash (OUT)
+ * @encrypted_password_hash: 16-octet EncryptedPasswordHash (OUT)
  */
 void old_nt_password_hash_encrypted_with_new_nt_password_hash(
 	const u8 *new_password, size_t new_password_len,

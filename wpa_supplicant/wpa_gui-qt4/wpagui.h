@@ -15,8 +15,10 @@
 #ifndef WPAGUI_H
 #define WPAGUI_H
 
+#include <QSystemTrayIcon>
 #include <QObject>
 #include "ui_wpagui.h"
+#include "addinterface.h"
 
 class UserDataRequest;
 
@@ -26,7 +28,7 @@ class WpaGui : public QMainWindow, public Ui::WpaGui
 	Q_OBJECT
 
 public:
-	WpaGui(QWidget *parent = 0, const char *name = 0,
+	WpaGui(QApplication *app, QWidget *parent = 0, const char *name = 0,
 	       Qt::WFlags fl = 0);
 	~WpaGui();
 
@@ -37,6 +39,10 @@ public:
 	virtual void enableNetwork(const QString &sel);
 	virtual void disableNetwork(const QString &sel);
 	virtual int getNetworkDisabled(const QString &sel);
+	void setBssFromScan(const QString &bssid);
+#ifndef QT_NO_SESSIONMANAGER
+	void saveState();
+#endif
 
 public slots:
 	virtual void parse_argv();
@@ -67,9 +73,24 @@ public slots:
 	virtual void updateNetworkDisabledStatus();
 	virtual void enableListedNetwork(bool);
 	virtual void disableListedNetwork(bool);
+	virtual void showTrayMessage(QSystemTrayIcon::MessageIcon type,
+				     int sec, const QString &msg);
+	virtual void showTrayStatus();
+	virtual void wpsDialog();
+	virtual void tabChanged(int index);
+	virtual void wpsPbc();
+	virtual void wpsGeneratePin();
+	virtual void wpsApPinChanged(const QString &text);
+	virtual void wpsApPin();
+#ifdef CONFIG_NATIVE_WINDOWS
+	virtual void startService();
+	virtual void stopService();
+#endif /* CONFIG_NATIVE_WINDOWS */
+	virtual void addInterface();
 
 protected slots:
 	virtual void languageChange();
+	virtual void trayActivated(QSystemTrayIcon::ActivationReason how);
 	virtual void closeEvent(QCloseEvent *event);
 
 private:
@@ -85,8 +106,42 @@ private:
 	char *ctrl_iface_dir;
 	struct wpa_ctrl *monitor_conn;
 	UserDataRequest *udr;
+	QAction *disconnectAction;
+	QAction *reconnectAction;
+	QAction *eventAction;
+	QAction *scanAction;
+	QAction *statAction;
+	QAction *showAction;
+	QAction *hideAction;
+	QAction *quitAction;
+	QMenu *tray_menu;
+	QSystemTrayIcon *tray_icon;
+	void createTrayIcon(bool);
+	bool ackTrayIcon;
+	bool startInTray;
 
 	int openCtrlConnection(const char *ifname);
+
+	bool wpsRunning;
+
+	QString bssFromScan;
+
+	void stopWpsRun(bool success);
+
+#ifdef CONFIG_NATIVE_WINDOWS
+	QAction *fileStartServiceAction;
+	QAction *fileStopServiceAction;
+
+	bool serviceRunning();
+#endif /* CONFIG_NATIVE_WINDOWS */
+
+	QAction *addInterfaceAction;
+	AddInterface *add_iface;
+
+	bool connectedToService;
+
+	QApplication *app;
+	bool inTray;
 };
 
 #endif /* WPAGUI_H */

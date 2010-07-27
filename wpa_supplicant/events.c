@@ -31,6 +31,7 @@
 #include "ieee802_11_defs.h"
 #include "blacklist.h"
 #include "wpas_glue.h"
+#include "wps_supplicant.h"
 
 
 static int wpa_supplicant_select_config(struct wpa_supplicant *wpa_s)
@@ -58,8 +59,9 @@ static int wpa_supplicant_select_config(struct wpa_supplicant *wpa_s)
 		   "AP");
 	if (ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_IEEE8021X |
 			      WPA_KEY_MGMT_WPA_NONE |
-			      WPA_KEY_MGMT_FT_PSK | WPA_KEY_MGMT_FT_IEEE8021X))
-	{
+			      WPA_KEY_MGMT_FT_PSK | WPA_KEY_MGMT_FT_IEEE8021X |
+			      WPA_KEY_MGMT_PSK_SHA256 |
+			      WPA_KEY_MGMT_IEEE8021X_SHA256)) {
 		u8 wpa_ie[80];
 		size_t wpa_ie_len = sizeof(wpa_ie);
 		wpa_supplicant_set_suites(wpa_s, NULL, ssid,
@@ -99,8 +101,7 @@ void wpa_supplicant_mark_disassoc(struct wpa_supplicant *wpa_s)
 	os_memset(wpa_s->pending_bssid, 0, ETH_ALEN);
 	eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
 	eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
-	if (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK)
+	if (wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt))
 		eapol_sm_notify_eap_success(wpa_s->eapol, FALSE);
 	wpa_s->ap_ies_from_associnfo = 0;
 }
@@ -250,6 +251,11 @@ static int wpa_supplicant_match_privacy(struct wpa_scan_res *bss,
 	if (ssid->mixed_cell)
 		return 1;
 
+#ifdef CONFIG_WPS
+	if (ssid->key_mgmt & WPA_KEY_MGMT_WPS)
+		return 1;
+#endif /* CONFIG_WPS */
+
 	for (i = 0; i < NUM_WEP_KEYS; i++) {
 		if (ssid->wep_key_len[i]) {
 			privacy = 1;
@@ -269,12 +275,18 @@ static int wpa_supplicant_match_privacy(struct wpa_scan_res *bss,
 }
 
 
-static int wpa_supplicant_ssid_bss_match(struct wpa_ssid *ssid,
+static int wpa_supplicant_ssid_bss_match(struct wpa_supplicant *wpa_s,
+					 struct wpa_ssid *ssid,
 					 struct wpa_scan_res *bss)
 {
 	struct wpa_ie_data ie;
 	int proto_match = 0;
 	const u8 *rsn_ie, *wpa_ie;
+	int ret;
+
+	ret = wpas_wps_ssid_bss_match(wpa_s, ssid, bss);
+	if (ret >= 0)
+		return ret;
 
 	rsn_ie = wpa_scan_get_ie(bss, WLAN_EID_RSN);
 	while ((ssid->proto & WPA_PROTO_RSN) && rsn_ie) {
@@ -309,8 +321,8 @@ static int wpa_supplicant_ssid_bss_match(struct wpa_ssid *ssid,
 		}
 
 #ifdef CONFIG_IEEE80211W
-		if (!(ie.capabilities & WPA_CAPABILITY_MGMT_FRAME_PROTECTION)
-		    && ssid->ieee80211w == IEEE80211W_REQUIRED) {
+		if (!(ie.capabilities & WPA_CAPABILITY_MFPC) &&
+		    ssid->ieee80211w == IEEE80211W_REQUIRED) {
 			wpa_printf(MSG_DEBUG, "   skip RSN IE - no mgmt frame "
 				   "protection");
 			break;
@@ -365,23 +377,18 @@ static int wpa_supplicant_ssid_bss_match(struct wpa_ssid *ssid,
 
 
 static struct wpa_scan_res *
-wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
-			  struct wpa_ssid **selected_ssid)
+wpa_supplicant_select_bss_wpa(struct wpa_supplicant *wpa_s,
+			      struct wpa_ssid *group,
+			      struct wpa_ssid **selected_ssid)
 {
 	struct wpa_ssid *ssid;
-	struct wpa_scan_res *bss, *selected = NULL;
+	struct wpa_scan_res *bss;
 	size_t i;
 	struct wpa_blacklist *e;
 	const u8 *ie;
 
-	wpa_printf(MSG_DEBUG, "Selecting BSS from priority group %d",
-		   group->priority);
-
-	bss = NULL;
-	ssid = NULL;
-	/* First, try to find WPA-enabled AP */
 	wpa_printf(MSG_DEBUG, "Try to find WPA-enabled AP");
-	for (i = 0; i < wpa_s->scan_res->num && !selected; i++) {
+	for (i = 0; i < wpa_s->scan_res->num; i++) {
 		const u8 *ssid_;
 		u8 wpa_ie_len, rsn_ie_len, ssid_len;
 		bss = wpa_s->scan_res->res[i];
@@ -401,9 +408,15 @@ wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
 			   (int) i, MAC2STR(bss->bssid),
 			   wpa_ssid_txt(ssid_, ssid_len),
 			   wpa_ie_len, rsn_ie_len, bss->caps);
+
 		e = wpa_blacklist_get(wpa_s, bss->bssid);
 		if (e && e->count > 1) {
 			wpa_printf(MSG_DEBUG, "   skip - blacklisted");
+			continue;
+		}
+
+		if (ssid_len == 0) {
+			wpa_printf(MSG_DEBUG, "   skip - SSID not known");
 			continue;
 		}
 
@@ -413,69 +426,20 @@ wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
 		}
 
 		for (ssid = group; ssid; ssid = ssid->pnext) {
+			int check_ssid = 1;
+
 			if (ssid->disabled) {
 				wpa_printf(MSG_DEBUG, "   skip - disabled");
 				continue;
 			}
-			if (ssid_len != ssid->ssid_len ||
-			    os_memcmp(ssid_, ssid->ssid, ssid_len) != 0) {
-				wpa_printf(MSG_DEBUG, "   skip - "
-					   "SSID mismatch");
-				continue;
-			}
-			if (ssid->bssid_set &&
-			    os_memcmp(bss->bssid, ssid->bssid, ETH_ALEN) != 0)
-			{
-				wpa_printf(MSG_DEBUG, "   skip - "
-					   "BSSID mismatch");
-				continue;
-			}
-			if (wpa_supplicant_ssid_bss_match(ssid, bss)) {
-				selected = bss;
-				*selected_ssid = ssid;
-				wpa_printf(MSG_DEBUG, "   selected WPA AP "
-					   MACSTR " ssid='%s'",
-					   MAC2STR(bss->bssid),
-					   wpa_ssid_txt(ssid_, ssid_len));
-				break;
-			}
-		}
-	}
 
-	/* If no WPA-enabled AP found, try to find non-WPA AP, if configuration
-	 * allows this. */
-	wpa_printf(MSG_DEBUG, "Try to find non-WPA AP");
-	for (i = 0; i < wpa_s->scan_res->num && !selected; i++) {
-		const u8 *ssid_;
-		u8 wpa_ie_len, rsn_ie_len, ssid_len;
-		bss = wpa_s->scan_res->res[i];
+#ifdef CONFIG_WPS
+			if (ssid->ssid_len == 0 &&
+			    wpas_wps_ssid_wildcard_ok(wpa_s, ssid, bss))
+				check_ssid = 0;
+#endif /* CONFIG_WPS */
 
-		ie = wpa_scan_get_ie(bss, WLAN_EID_SSID);
-		ssid_ = ie ? ie + 2 : (u8 *) "";
-		ssid_len = ie ? ie[1] : 0;
-
-		ie = wpa_scan_get_vendor_ie(bss, WPA_IE_VENDOR_TYPE);
-		wpa_ie_len = ie ? ie[1] : 0;
-
-		ie = wpa_scan_get_ie(bss, WLAN_EID_RSN);
-		rsn_ie_len = ie ? ie[1] : 0;
-
-		wpa_printf(MSG_DEBUG, "%d: " MACSTR " ssid='%s' "
-			   "wpa_ie_len=%u rsn_ie_len=%u caps=0x%x",
-			   (int) i, MAC2STR(bss->bssid),
-			   wpa_ssid_txt(ssid_, ssid_len),
-			   wpa_ie_len, rsn_ie_len, bss->caps);
-		e = wpa_blacklist_get(wpa_s, bss->bssid);
-		if (e && e->count > 1) {
-			wpa_printf(MSG_DEBUG, "   skip - blacklisted");
-			continue;
-		}
-		for (ssid = group; ssid; ssid = ssid->pnext) {
-			if (ssid->disabled) {
-				wpa_printf(MSG_DEBUG, "   skip - disabled");
-				continue;
-			}
-			if (ssid->ssid_len != 0 &&
+			if (check_ssid &&
 			    (ssid_len != ssid->ssid_len ||
 			     os_memcmp(ssid_, ssid->ssid, ssid_len) != 0)) {
 				wpa_printf(MSG_DEBUG, "   skip - "
@@ -490,8 +454,106 @@ wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
 					   "BSSID mismatch");
 				continue;
 			}
-			
+
+			if (!wpa_supplicant_ssid_bss_match(wpa_s, ssid, bss))
+				continue;
+
+			wpa_printf(MSG_DEBUG, "   selected WPA AP "
+				   MACSTR " ssid='%s'",
+				   MAC2STR(bss->bssid),
+				   wpa_ssid_txt(ssid_, ssid_len));
+			*selected_ssid = ssid;
+			return bss;
+		}
+	}
+
+	return NULL;
+}
+
+
+static struct wpa_scan_res *
+wpa_supplicant_select_bss_non_wpa(struct wpa_supplicant *wpa_s,
+				  struct wpa_ssid *group,
+				  struct wpa_ssid **selected_ssid)
+{
+	struct wpa_ssid *ssid;
+	struct wpa_scan_res *bss;
+	size_t i;
+	struct wpa_blacklist *e;
+	const u8 *ie;
+
+	wpa_printf(MSG_DEBUG, "Try to find non-WPA AP");
+	for (i = 0; i < wpa_s->scan_res->num; i++) {
+		const u8 *ssid_;
+		u8 wpa_ie_len, rsn_ie_len, ssid_len;
+		bss = wpa_s->scan_res->res[i];
+
+		ie = wpa_scan_get_ie(bss, WLAN_EID_SSID);
+		ssid_ = ie ? ie + 2 : (u8 *) "";
+		ssid_len = ie ? ie[1] : 0;
+
+		ie = wpa_scan_get_vendor_ie(bss, WPA_IE_VENDOR_TYPE);
+		wpa_ie_len = ie ? ie[1] : 0;
+
+		ie = wpa_scan_get_ie(bss, WLAN_EID_RSN);
+		rsn_ie_len = ie ? ie[1] : 0;
+
+		wpa_printf(MSG_DEBUG, "%d: " MACSTR " ssid='%s' "
+			   "wpa_ie_len=%u rsn_ie_len=%u caps=0x%x",
+			   (int) i, MAC2STR(bss->bssid),
+			   wpa_ssid_txt(ssid_, ssid_len),
+			   wpa_ie_len, rsn_ie_len, bss->caps);
+
+		e = wpa_blacklist_get(wpa_s, bss->bssid);
+		if (e && e->count > 1) {
+			wpa_printf(MSG_DEBUG, "   skip - blacklisted");
+			continue;
+		}
+
+		if (ssid_len == 0) {
+			wpa_printf(MSG_DEBUG, "   skip - SSID not known");
+			continue;
+		}
+
+		for (ssid = group; ssid; ssid = ssid->pnext) {
+			int check_ssid = ssid->ssid_len != 0;
+
+			if (ssid->disabled) {
+				wpa_printf(MSG_DEBUG, "   skip - disabled");
+				continue;
+			}
+
+#ifdef CONFIG_WPS
+			if (ssid->key_mgmt & WPA_KEY_MGMT_WPS) {
+				/* Only allow wildcard SSID match if an AP
+				 * advertises active WPS operation that matches
+				 * with our mode. */
+				check_ssid = 1;
+				if (ssid->ssid_len == 0 &&
+				    wpas_wps_ssid_wildcard_ok(wpa_s, ssid,
+							      bss))
+					check_ssid = 0;
+			}
+#endif /* CONFIG_WPS */
+
+			if (check_ssid &&
+			    (ssid_len != ssid->ssid_len ||
+			     os_memcmp(ssid_, ssid->ssid, ssid_len) != 0)) {
+				wpa_printf(MSG_DEBUG, "   skip - "
+					   "SSID mismatch");
+				continue;
+			}
+
+			if (ssid->bssid_set &&
+			    os_memcmp(bss->bssid, ssid->bssid, ETH_ALEN) != 0)
+			{
+				wpa_printf(MSG_DEBUG, "   skip - "
+					   "BSSID mismatch");
+				continue;
+			}
+
 			if (!(ssid->key_mgmt & WPA_KEY_MGMT_NONE) &&
+			    !(ssid->key_mgmt & WPA_KEY_MGMT_WPS) &&
 			    !(ssid->key_mgmt & WPA_KEY_MGMT_IEEE8021X_NO_WPA))
 			{
 				wpa_printf(MSG_DEBUG, "   skip - "
@@ -499,8 +561,11 @@ wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
 				continue;
 			}
 
-			if ((ssid->key_mgmt & 
-			     (WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_PSK)) &&
+			if ((ssid->key_mgmt &
+			     (WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_PSK |
+			      WPA_KEY_MGMT_FT_IEEE8021X | WPA_KEY_MGMT_FT_PSK |
+			      WPA_KEY_MGMT_IEEE8021X_SHA256 |
+			      WPA_KEY_MGMT_PSK_SHA256)) &&
 			    (wpa_ie_len != 0 || rsn_ie_len != 0)) {
 				wpa_printf(MSG_DEBUG, "   skip - "
 					   "WPA network");
@@ -519,17 +584,36 @@ wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
 				continue;
 			}
 
-			selected = bss;
-			*selected_ssid = ssid;
 			wpa_printf(MSG_DEBUG, "   selected non-WPA AP "
 				   MACSTR " ssid='%s'",
 				   MAC2STR(bss->bssid),
 				   wpa_ssid_txt(ssid_, ssid_len));
-			break;
+			*selected_ssid = ssid;
+			return bss;
 		}
 	}
 
-	return selected;
+	return NULL;
+}
+
+
+static struct wpa_scan_res *
+wpa_supplicant_select_bss(struct wpa_supplicant *wpa_s, struct wpa_ssid *group,
+			  struct wpa_ssid **selected_ssid)
+{
+	struct wpa_scan_res *selected;
+
+	wpa_printf(MSG_DEBUG, "Selecting BSS from priority group %d",
+		   group->priority);
+
+	/* First, try to find WPA-enabled AP */
+	selected = wpa_supplicant_select_bss_wpa(wpa_s, group, selected_ssid);
+	if (selected)
+		return selected;
+
+	/* If no WPA-enabled AP found, try to find non-WPA AP, if configuration
+	 * allows this. */
+	return wpa_supplicant_select_bss_non_wpa(wpa_s, group, selected_ssid);
 }
 
 
@@ -538,6 +622,8 @@ static void wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s)
 	int prio, timeout;
 	struct wpa_scan_res *selected = NULL;
 	struct wpa_ssid *ssid = NULL;
+
+	wpa_supplicant_notify_scanning(wpa_s, 0);
 
 	if (wpa_supplicant_get_scan_results(wpa_s) < 0) {
 		if (wpa_s->conf->ap_scan == 2)
@@ -548,12 +634,28 @@ static void wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s)
 		goto req_scan;
 	}
 
-	wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_SCAN_RESULTS);
+	/*
+	 * Don't post the results if this was the initial cached
+	 * and there were no results.
+	 */
+	if (wpa_s->scan_res_tried == 1 && wpa_s->conf->ap_scan == 1 &&
+	    wpa_s->scan_res->num == 0) {
+		wpa_msg(wpa_s, MSG_DEBUG, "Cached scan results are "
+			"empty - not posting");
+	} else {
+		wpa_printf(MSG_DEBUG, "New scan results available");
+		wpa_msg_ctrl(wpa_s, MSG_INFO, WPA_EVENT_SCAN_RESULTS);
+		wpa_supplicant_dbus_notify_scan_results(wpa_s);
+		wpas_wps_notify_scan_results(wpa_s);
+	}
 
-	wpa_supplicant_dbus_notify_scan_results(wpa_s);
-
-	if (wpa_s->conf->ap_scan == 2 || wpa_s->disconnected)
+	if ((wpa_s->conf->ap_scan == 2 && !wpas_wps_searching(wpa_s)))
 		return;
+
+	if (wpa_s->disconnected) {
+		wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
+		return;
+	}
 
 	while (selected == NULL) {
 		for (prio = 0; prio < wpa_s->conf->num_prio; prio++) {
@@ -567,12 +669,20 @@ static void wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s)
 			wpa_printf(MSG_DEBUG, "No APs found - clear blacklist "
 				   "and try again");
 			wpa_blacklist_clear(wpa_s);
+			wpa_s->blacklist_cleared++;
 		} else if (selected == NULL) {
 			break;
 		}
 	}
 
 	if (selected) {
+		if (wpas_wps_scan_pbc_overlap(wpa_s, selected, ssid)) {
+			wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_OVERLAP
+				"PBC session overlap");
+			timeout = 10;
+			goto req_scan;
+		}
+
 		/* Do not trigger new association unless the BSSID has changed
 		 * or if reassociation is requested. If we are in process of
 		 * associating with the selected BSSID, do not trigger new
@@ -608,6 +718,14 @@ req_scan:
 		 */
 		wpa_s->scan_res_tried++;
 		timeout = 0;
+	} else if (!wpa_supplicant_enabled_networks(wpa_s->conf)) {
+		/*
+		 * No networks are enabled; short-circuit request so
+		 * we don't wait timeout seconds before transitioning
+		 * to INACTIVE state.
+		 */
+		wpa_supplicant_set_state(wpa_s, WPA_INACTIVE);
+		return;
 	}
 	wpa_supplicant_req_scan(wpa_s, timeout, 0);
 }
@@ -750,8 +868,7 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
 		eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
 	}
-	if (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK || ft_completed)
+	if (wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt) || ft_completed)
 		eapol_sm_notify_eap_success(wpa_s->eapol, FALSE);
 	/* 802.1X::portControl = Auto */
 	eapol_sm_notify_portEnabled(wpa_s->eapol, TRUE);
@@ -767,8 +884,7 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 	wpa_supplicant_cancel_scan(wpa_s);
 
 	if (wpa_s->driver_4way_handshake &&
-	    (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	     wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK)) {
+	    wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt)) {
 		/*
 		 * We are done; the driver will take care of RSN 4-way
 		 * handshake.
@@ -777,6 +893,25 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		wpa_supplicant_set_state(wpa_s, WPA_COMPLETED);
 		eapol_sm_notify_portValid(wpa_s->eapol, TRUE);
 		eapol_sm_notify_eap_success(wpa_s->eapol, TRUE);
+	}
+
+	if (wpa_s->pending_eapol_rx) {
+		struct os_time now, age;
+		os_get_time(&now);
+		os_time_sub(&now, &wpa_s->pending_eapol_rx_time, &age);
+		if (age.sec == 0 && age.usec < 100000 &&
+		    os_memcmp(wpa_s->pending_eapol_rx_src, bssid, ETH_ALEN) ==
+		    0) {
+			wpa_printf(MSG_DEBUG, "Process pending EAPOL frame "
+				   "that was received just before association "
+				   "notification");
+			wpa_supplicant_rx_eapol(
+				wpa_s, wpa_s->pending_eapol_rx_src,
+				wpabuf_head(wpa_s->pending_eapol_rx),
+				wpabuf_len(wpa_s->pending_eapol_rx));
+		}
+		wpabuf_free(wpa_s->pending_eapol_rx);
+		wpa_s->pending_eapol_rx = NULL;
 	}
 }
 
@@ -797,15 +932,14 @@ static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s)
 	}
 
 	if (wpa_s->wpa_state == WPA_4WAY_HANDSHAKE &&
-	    (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	     wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK)) {
+	    wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt)) {
 		wpa_msg(wpa_s, MSG_INFO, "WPA: 4-Way Handshake failed - "
 			"pre-shared key may be incorrect");
 	}
 	if (wpa_s->wpa_state >= WPA_ASSOCIATED)
 		wpa_supplicant_req_scan(wpa_s, 0, 100000);
 	bssid = wpa_s->bssid;
-	if (os_memcmp(bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) == 0)
+	if (is_zero_ether_addr(bssid))
 		bssid = wpa_s->pending_bssid;
 	wpa_blacklist_add(wpa_s, bssid);
 	wpa_sm_notify_disassoc(wpa_s->wpa);
@@ -819,6 +953,22 @@ static void wpa_supplicant_event_disassoc(struct wpa_supplicant *wpa_s)
 }
 
 
+#ifdef CONFIG_DELAYED_MIC_ERROR_REPORT
+static void wpa_supplicant_delayed_mic_error_report(void *eloop_ctx,
+						    void *sock_ctx)
+{
+	struct wpa_supplicant *wpa_s = eloop_ctx;
+
+	if (!wpa_s->pending_mic_error_report)
+		return;
+
+	wpa_printf(MSG_DEBUG, "WPA: Sending pending MIC error report");
+	wpa_sm_key_request(wpa_s->wpa, 1, wpa_s->pending_mic_error_pairwise);
+	wpa_s->pending_mic_error_report = 0;
+}
+#endif /* CONFIG_DELAYED_MIC_ERROR_REPORT */
+
+
 static void
 wpa_supplicant_event_michael_mic_failure(struct wpa_supplicant *wpa_s,
 					 union wpa_event_data *data)
@@ -828,10 +978,25 @@ wpa_supplicant_event_michael_mic_failure(struct wpa_supplicant *wpa_s,
 
 	wpa_msg(wpa_s, MSG_WARNING, "Michael MIC failure detected");
 	pairwise = (data && data->michael_mic_failure.unicast);
-	wpa_sm_key_request(wpa_s->wpa, 1, pairwise);
 	os_get_time(&t);
-	if (wpa_s->last_michael_mic_error &&
-	    t.sec - wpa_s->last_michael_mic_error <= 60) {
+	if ((wpa_s->last_michael_mic_error &&
+	     t.sec - wpa_s->last_michael_mic_error <= 60) ||
+	    wpa_s->pending_mic_error_report) {
+		if (wpa_s->pending_mic_error_report) {
+			/*
+			 * Send the pending MIC error report immediately since
+			 * we are going to start countermeasures and AP better
+			 * do the same.
+			 */
+			wpa_sm_key_request(wpa_s->wpa, 1,
+					   wpa_s->pending_mic_error_pairwise);
+		}
+
+		/* Send the new MIC error report immediately since we are going
+		 * to start countermeasures and AP better do the same.
+		 */
+		wpa_sm_key_request(wpa_s->wpa, 1, pairwise);
+
 		/* initialize countermeasures */
 		wpa_s->countermeasures = 1;
 		wpa_msg(wpa_s, MSG_WARNING, "TKIP countermeasures started");
@@ -852,8 +1017,46 @@ wpa_supplicant_event_michael_mic_failure(struct wpa_supplicant *wpa_s,
 				       wpa_s, NULL);
 		/* TODO: mark the AP rejected for 60 second. STA is
 		 * allowed to associate with another AP.. */
+	} else {
+#ifdef CONFIG_DELAYED_MIC_ERROR_REPORT
+		if (wpa_s->mic_errors_seen) {
+			/*
+			 * Reduce the effectiveness of Michael MIC error
+			 * reports as a means for attacking against TKIP if
+			 * more than one MIC failure is noticed with the same
+			 * PTK. We delay the transmission of the reports by a
+			 * random time between 0 and 60 seconds in order to
+			 * force the attacker wait 60 seconds before getting
+			 * the information on whether a frame resulted in a MIC
+			 * failure.
+			 */
+			u8 rval[4];
+			int sec;
+
+			if (os_get_random(rval, sizeof(rval)) < 0)
+				sec = os_random() % 60;
+			else
+				sec = WPA_GET_BE32(rval) % 60;
+			wpa_printf(MSG_DEBUG, "WPA: Delay MIC error report %d "
+				   "seconds", sec);
+			wpa_s->pending_mic_error_report = 1;
+			wpa_s->pending_mic_error_pairwise = pairwise;
+			eloop_cancel_timeout(
+				wpa_supplicant_delayed_mic_error_report,
+				wpa_s, NULL);
+			eloop_register_timeout(
+				sec, os_random() % 1000000,
+				wpa_supplicant_delayed_mic_error_report,
+				wpa_s, NULL);
+		} else {
+			wpa_sm_key_request(wpa_s->wpa, 1, pairwise);
+		}
+#else /* CONFIG_DELAYED_MIC_ERROR_REPORT */
+		wpa_sm_key_request(wpa_s->wpa, 1, pairwise);
+#endif /* CONFIG_DELAYED_MIC_ERROR_REPORT */
 	}
 	wpa_s->last_michael_mic_error = t.sec;
+	wpa_s->mic_errors_seen++;
 }
 
 

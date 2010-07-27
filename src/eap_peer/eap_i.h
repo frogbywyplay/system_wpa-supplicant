@@ -328,12 +328,13 @@ struct eap_sm {
 
 	/* Optional challenges generated in Phase 1 (EAP-FAST) */
 	u8 *peer_challenge, *auth_challenge;
-	int mschapv2_full_key; /* Request full MSCHAPv2 key */
 
 	int num_rounds;
 	int force_disabled;
 
-	u8 mac_addr[ETH_ALEN];
+	struct wps_context *wps;
+
+	int prev_failure;
 };
 
 const u8 * eap_get_config_identity(struct eap_sm *sm, size_t *len);
@@ -349,5 +350,6 @@ void eap_set_config_blob(struct eap_sm *sm, struct wpa_config_blob *blob);
 const struct wpa_config_blob *
 eap_get_config_blob(struct eap_sm *sm, const char *name);
 void eap_notify_pending(struct eap_sm *sm);
+int eap_allowed_method(struct eap_sm *sm, int vendor, u32 method);
 
 #endif /* EAP_I_H */

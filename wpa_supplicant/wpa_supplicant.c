@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant
- * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2009, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -38,10 +38,11 @@
 #include "ieee802_11_defs.h"
 #include "blacklist.h"
 #include "wpas_glue.h"
+#include "wps_supplicant.h"
 
 const char *wpa_supplicant_version =
 "wpa_supplicant v" VERSION_STR "\n"
-"Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi> and contributors";
+"Copyright (c) 2003-2009, Jouni Malinen <j@w1.fi> and contributors";
 
 const char *wpa_supplicant_license =
 "This program is free software. You can distribute it and/or modify it\n"
@@ -106,8 +107,6 @@ const char *wpa_supplicant_full_license5 =
 "OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
 "\n";
 #endif /* CONFIG_NO_STDOUT_DEBUG */
-
-extern struct wpa_driver_ops *wpa_supplicant_drivers[];
 
 extern int wpa_debug_level;
 extern int wpa_debug_show_keys;
@@ -187,7 +186,7 @@ static void wpa_supplicant_timeout(void *eloop_ctx, void *timeout_ctx)
 {
 	struct wpa_supplicant *wpa_s = eloop_ctx;
 	const u8 *bssid = wpa_s->bssid;
-	if (os_memcmp(bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) == 0)
+	if (is_zero_ether_addr(bssid))
 		bssid = wpa_s->pending_bssid;
 	wpa_msg(wpa_s, MSG_INFO, "Authentication with " MACSTR " timed out.",
 		MAC2STR(bssid));
@@ -212,7 +211,7 @@ void wpa_supplicant_req_auth_timeout(struct wpa_supplicant *wpa_s,
 				     int sec, int usec)
 {
 	if (wpa_s->conf && wpa_s->conf->ap_scan == 0 &&
-	    wpa_s->driver && os_strcmp(wpa_s->driver->name, "wired") == 0)
+	    wpa_s->driver && IS_WIRED(wpa_s->driver))
 		return;
 
 	wpa_msg(wpa_s, MSG_DEBUG, "Setting authentication timeout: %d sec "
@@ -251,11 +250,9 @@ void wpa_supplicant_initiate_eapol(struct wpa_supplicant *wpa_s)
 	struct eapol_config eapol_conf;
 	struct wpa_ssid *ssid = wpa_s->current_ssid;
 
-	if (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK) {
-		eapol_sm_notify_eap_success(wpa_s->eapol, FALSE);
-		eapol_sm_notify_eap_fail(wpa_s->eapol, FALSE);
-	}
+	eapol_sm_notify_eap_success(wpa_s->eapol, FALSE);
+	eapol_sm_notify_eap_fail(wpa_s->eapol, FALSE);
+
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_NONE ||
 	    wpa_s->key_mgmt == WPA_KEY_MGMT_WPA_NONE)
 		eapol_sm_notify_portControl(wpa_s->eapol, ForceAuthorized);
@@ -274,17 +271,17 @@ void wpa_supplicant_initiate_eapol(struct wpa_supplicant *wpa_s)
 				EAPOL_REQUIRE_KEY_BROADCAST;
 		}
 
-		if (wpa_s->conf && wpa_s->driver &&
-		    os_strcmp(wpa_s->driver->name, "wired") == 0) {
+		if (wpa_s->conf && wpa_s->driver && IS_WIRED(wpa_s->driver)) {
 			eapol_conf.required_keys = 0;
 		}
 	}
 	if (wpa_s->conf)
 		eapol_conf.fast_reauth = wpa_s->conf->fast_reauth;
 	eapol_conf.workaround = ssid->eap_workaround;
-	eapol_conf.eap_disabled = wpa_s->key_mgmt != WPA_KEY_MGMT_IEEE8021X &&
-		wpa_s->key_mgmt != WPA_KEY_MGMT_FT_IEEE8021X &&
-		wpa_s->key_mgmt != WPA_KEY_MGMT_IEEE8021X_NO_WPA;
+	eapol_conf.eap_disabled =
+		!wpa_key_mgmt_wpa_ieee8021x(wpa_s->key_mgmt) &&
+		wpa_s->key_mgmt != WPA_KEY_MGMT_IEEE8021X_NO_WPA &&
+		wpa_s->key_mgmt != WPA_KEY_MGMT_WPS;
 	eapol_sm_notify_config(wpa_s->eapol, &ssid->eap, &eapol_conf);
 #endif /* IEEE8021X_EAPOL */
 }
@@ -304,7 +301,9 @@ void wpa_supplicant_set_non_wpa_policy(struct wpa_supplicant *wpa_s,
 {
 	int i;
 
-	if (ssid->key_mgmt & WPA_KEY_MGMT_IEEE8021X_NO_WPA)
+	if (ssid->key_mgmt & WPA_KEY_MGMT_WPS)
+		wpa_s->key_mgmt = WPA_KEY_MGMT_WPS;
+	else if (ssid->key_mgmt & WPA_KEY_MGMT_IEEE8021X_NO_WPA)
 		wpa_s->key_mgmt = WPA_KEY_MGMT_IEEE8021X_NO_WPA;
 	else
 		wpa_s->key_mgmt = WPA_KEY_MGMT_NONE;
@@ -384,6 +383,11 @@ static void wpa_supplicant_cleanup(struct wpa_supplicant *wpa_s)
 	wpa_supplicant_cancel_auth_timeout(wpa_s);
 
 	ieee80211_sta_deinit(wpa_s);
+
+	wpas_wps_deinit(wpa_s);
+
+	wpabuf_free(wpa_s->pending_eapol_rx);
+	wpa_s->pending_eapol_rx = NULL;
 }
 
 
@@ -417,6 +421,10 @@ void wpa_clear_keys(struct wpa_supplicant *wpa_s, const u8 *addr)
 	wpa_drv_set_key(wpa_s, WPA_ALG_NONE, bcast, 1, 0, NULL, 0, NULL, 0);
 	wpa_drv_set_key(wpa_s, WPA_ALG_NONE, bcast, 2, 0, NULL, 0, NULL, 0);
 	wpa_drv_set_key(wpa_s, WPA_ALG_NONE, bcast, 3, 0, NULL, 0, NULL, 0);
+#ifdef CONFIG_IEEE80211W
+	wpa_drv_set_key(wpa_s, WPA_ALG_NONE, bcast, 4, 0, NULL, 0, NULL, 0);
+	wpa_drv_set_key(wpa_s, WPA_ALG_NONE, bcast, 5, 0, NULL, 0, NULL, 0);
+#endif /* CONFIG_IEEE80211W */
 	if (addr) {
 		wpa_drv_set_key(wpa_s, WPA_ALG_NONE, addr, 0, 0, NULL, 0, NULL,
 				0);
@@ -473,6 +481,9 @@ void wpa_supplicant_set_state(struct wpa_supplicant *wpa_s, wpa_states state)
 	wpa_printf(MSG_DEBUG, "State: %s -> %s",
 		   wpa_supplicant_state_txt(wpa_s->wpa_state),
 		   wpa_supplicant_state_txt(state));
+
+	if (state != WPA_SCANNING)
+		wpa_supplicant_notify_scanning(wpa_s, 0);
 
 	wpa_supplicant_dbus_notify_state_change(wpa_s, state,
 						wpa_s->wpa_state);
@@ -562,8 +573,7 @@ int wpa_supplicant_reload_configuration(struct wpa_supplicant *wpa_s)
 	 * TODO: should notify EAPOL SM about changes in opensc_engine_path,
 	 * pkcs11_engine_path, pkcs11_module_path.
 	 */
-	if (wpa_s->key_mgmt == WPA_KEY_MGMT_PSK ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_FT_PSK) {
+	if (wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt)) {
 		/*
 		 * Clear forced success to clear EAP state for next
 		 * authentication.
@@ -634,6 +644,12 @@ static wpa_key_mgmt key_mgmt2driver(int key_mgmt)
 		return KEY_MGMT_FT_802_1X;
 	case WPA_KEY_MGMT_FT_PSK:
 		return KEY_MGMT_FT_PSK;
+	case WPA_KEY_MGMT_IEEE8021X_SHA256:
+		return KEY_MGMT_802_1X_SHA256;
+	case WPA_KEY_MGMT_PSK_SHA256:
+		return KEY_MGMT_PSK_SHA256;
+	case WPA_KEY_MGMT_WPS:
+		return KEY_MGMT_WPS;
 	case WPA_KEY_MGMT_PSK:
 	default:
 		return KEY_MGMT_PSK;
@@ -676,7 +692,7 @@ static int wpa_supplicant_suites_from_ai(struct wpa_supplicant *wpa_s,
 	}
 
 #ifdef CONFIG_IEEE80211W
-	if (!(ie->capabilities & WPA_CAPABILITY_MGMT_FRAME_PROTECTION) &&
+	if (!(ie->capabilities & WPA_CAPABILITY_MFPC) &&
 	    ssid->ieee80211w == IEEE80211W_REQUIRED) {
 		wpa_msg(wpa_s, MSG_INFO, "WPA: Driver associated with an AP "
 			"that does not support management frame protection - "
@@ -822,6 +838,16 @@ int wpa_supplicant_set_suites(struct wpa_supplicant *wpa_s,
 		wpa_s->key_mgmt = WPA_KEY_MGMT_FT_PSK;
 		wpa_msg(wpa_s, MSG_DEBUG, "WPA: using KEY_MGMT FT/PSK");
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_IEEE80211W
+	} else if (sel & WPA_KEY_MGMT_IEEE8021X_SHA256) {
+		wpa_s->key_mgmt = WPA_KEY_MGMT_IEEE8021X_SHA256;
+		wpa_msg(wpa_s, MSG_DEBUG,
+			"WPA: using KEY_MGMT 802.1X with SHA256");
+	} else if (sel & WPA_KEY_MGMT_PSK_SHA256) {
+		wpa_s->key_mgmt = WPA_KEY_MGMT_PSK_SHA256;
+		wpa_msg(wpa_s, MSG_DEBUG,
+			"WPA: using KEY_MGMT PSK with SHA256");
+#endif /* CONFIG_IEEE80211W */
 	} else if (sel & WPA_KEY_MGMT_IEEE8021X) {
 		wpa_s->key_mgmt = WPA_KEY_MGMT_IEEE8021X;
 		wpa_msg(wpa_s, MSG_DEBUG, "WPA: using KEY_MGMT 802.1X");
@@ -845,7 +871,7 @@ int wpa_supplicant_set_suites(struct wpa_supplicant *wpa_s,
 #ifdef CONFIG_IEEE80211W
 	sel = ie.mgmt_group_cipher;
 	if (ssid->ieee80211w == NO_IEEE80211W ||
-	    !(ie.capabilities & WPA_CAPABILITY_MGMT_FRAME_PROTECTION))
+	    !(ie.capabilities & WPA_CAPABILITY_MFPC))
 		sel = 0;
 	if (sel & WPA_CIPHER_AES_128_CMAC) {
 		wpa_s->mgmt_group_cipher = WPA_CIPHER_AES_128_CMAC;
@@ -864,7 +890,8 @@ int wpa_supplicant_set_suites(struct wpa_supplicant *wpa_s,
 		return -1;
 	}
 
-	if (ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK))
+	if (ssid->key_mgmt &
+	    (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK | WPA_KEY_MGMT_PSK_SHA256))
 		wpa_sm_set_pmk(wpa_s->wpa, ssid->psk, PMK_LEN);
 	else
 		wpa_sm_set_pmk_from_pmksa(wpa_s->wpa);
@@ -910,7 +937,22 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 		if (ie && ie[1] >= MOBILITY_DOMAIN_ID_LEN)
 			md = ie + 2;
 		wpa_sm_set_ft_params(wpa_s->wpa, md, NULL, 0, NULL);
+		if (md) {
+			/* Prepare for the next transition */
+			wpa_ft_prepare_auth_request(wpa_s->wpa);
+		}
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_WPS
+	} else if ((ssid->ssid == NULL || ssid->ssid_len == 0) &&
+		   wpa_s->conf->ap_scan == 2 &&
+		   (ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
+		/* Use ap_scan==1 style network selection to find the network
+		 */
+		wpa_s->scan_req = 2;
+		wpa_s->reassociate = 1;
+		wpa_supplicant_req_scan(wpa_s, 0, 0);
+		return;
+#endif /* CONFIG_WPS */
 	} else {
 		wpa_msg(wpa_s, MSG_INFO, "Trying to associate with SSID '%s'",
 			wpa_ssid_txt(ssid->ssid, ssid->ssid_len));
@@ -921,6 +963,11 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 	/* Starting new association, so clear the possibly used WPA IE from the
 	 * previous association. */
 	wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, NULL, 0);
+
+	if (wpa_drv_set_mode(wpa_s, ssid->mode)) {
+		wpa_printf(MSG_WARNING, "Failed to set operating mode");
+		assoc_failed = 1;
+	}
 
 #ifdef IEEE8021X_EAPOL
 	if (ssid->key_mgmt & WPA_KEY_MGMT_IEEE8021X_NO_WPA) {
@@ -950,7 +997,9 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 		    wpa_scan_get_ie(bss, WLAN_EID_RSN)) &&
 	    (ssid->key_mgmt & (WPA_KEY_MGMT_IEEE8021X | WPA_KEY_MGMT_PSK |
 			       WPA_KEY_MGMT_FT_IEEE8021X |
-			       WPA_KEY_MGMT_FT_PSK))) {
+			       WPA_KEY_MGMT_FT_PSK |
+			       WPA_KEY_MGMT_IEEE8021X_SHA256 |
+			       WPA_KEY_MGMT_PSK_SHA256))) {
 		int try_opportunistic;
 		try_opportunistic = ssid->proactive_key_caching &&
 			(ssid->proto & WPA_PROTO_RSN);
@@ -968,7 +1017,8 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 	} else if (ssid->key_mgmt &
 		   (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_IEEE8021X |
 		    WPA_KEY_MGMT_WPA_NONE | WPA_KEY_MGMT_FT_PSK |
-		    WPA_KEY_MGMT_FT_IEEE8021X)) {
+		    WPA_KEY_MGMT_FT_IEEE8021X | WPA_KEY_MGMT_PSK_SHA256 |
+		    WPA_KEY_MGMT_IEEE8021X_SHA256)) {
 		wpa_ie_len = sizeof(wpa_ie);
 		if (wpa_supplicant_set_suites(wpa_s, NULL, ssid,
 					      wpa_ie, &wpa_ie_len)) {
@@ -977,6 +1027,18 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 				   "results)");
 			return;
 		}
+#ifdef CONFIG_WPS
+	} else if (ssid->key_mgmt & WPA_KEY_MGMT_WPS) {
+		struct wpabuf *wps_ie;
+		wps_ie = wps_build_assoc_req_ie(wpas_wps_get_req_type(ssid));
+		if (wps_ie && wpabuf_len(wps_ie) <= sizeof(wpa_ie)) {
+			wpa_ie_len = wpabuf_len(wps_ie);
+			os_memcpy(wpa_ie, wpabuf_head(wps_ie), wpa_ie_len);
+		} else
+			wpa_ie_len = 0;
+		wpabuf_free(wps_ie);
+		wpa_supplicant_set_non_wpa_policy(wpa_s, ssid);
+#endif /* CONFIG_WPS */
 	} else {
 		wpa_supplicant_set_non_wpa_policy(wpa_s, ssid);
 		wpa_ie_len = 0;
@@ -995,6 +1057,8 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 			wep_keys_set = 1;
 		}
 	}
+	if (wpa_s->key_mgmt == WPA_KEY_MGMT_WPS)
+		use_crypt = 0;
 
 #ifdef IEEE8021X_EAPOL
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X_NO_WPA) {
@@ -1066,6 +1130,18 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 		params.mgmt_frame_protection = MGMT_FRAME_PROTECTION_REQUIRED;
 		break;
 	}
+	if (ssid->ieee80211w != NO_IEEE80211W && bss) {
+		const u8 *rsn = wpa_scan_get_ie(bss, WLAN_EID_RSN);
+		struct wpa_ie_data ie;
+		if (rsn && wpa_parse_wpa_ie(rsn, 2 + rsn[1], &ie) == 0 &&
+		    ie.capabilities &
+		    (WPA_CAPABILITY_MFPC | WPA_CAPABILITY_MFPR)) {
+			wpa_printf(MSG_DEBUG, "WPA: Selected AP supports MFP: "
+				   "require MFP");
+			params.mgmt_frame_protection =
+				MGMT_FRAME_PROTECTION_REQUIRED;
+		}
+	}
 #endif /* CONFIG_IEEE80211W */
 
 	if (wpa_s->use_client_mlme)
@@ -1090,13 +1166,15 @@ void wpa_supplicant_associate(struct wpa_supplicant *wpa_s,
 		wpa_supplicant_set_state(wpa_s, WPA_COMPLETED);
 	} else {
 		/* Timeout for IEEE 802.11 authentication and association */
-		int timeout;
-		if (assoc_failed)
-			timeout = 5;
-		else if (wpa_s->conf->ap_scan == 1)
-			timeout = 10;
-		else
-			timeout = 60;
+		int timeout = 60;
+
+		if (assoc_failed) {
+			/* give IBSS a bit more time */
+ 			timeout = ssid->mode ? 10 : 5;
+		} else if (wpa_s->conf->ap_scan == 1) {
+			/* give IBSS a bit more time */
+ 			timeout = ssid->mode ? 20 : 10;
+		}
 		wpa_supplicant_req_auth_timeout(wpa_s, timeout, 0);
 	}
 
@@ -1131,8 +1209,7 @@ void wpa_supplicant_disassociate(struct wpa_supplicant *wpa_s,
 				 int reason_code)
 {
 	u8 *addr = NULL;
-	if (os_memcmp(wpa_s->bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) != 0)
-	{
+	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		if (wpa_s->use_client_mlme)
 			ieee80211_sta_disassociate(wpa_s, reason_code);
 		else
@@ -1152,16 +1229,14 @@ void wpa_supplicant_disassociate(struct wpa_supplicant *wpa_s,
  * @wpa_s: Pointer to wpa_supplicant data
  * @reason_code: IEEE 802.11 reason code for the deauthenticate frame
  *
- * This function is used to request %wpa_supplicant to disassociate with the
+ * This function is used to request %wpa_supplicant to deauthenticate from the
  * current AP.
  */
 void wpa_supplicant_deauthenticate(struct wpa_supplicant *wpa_s,
 				   int reason_code)
 {
 	u8 *addr = NULL;
-	wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
-	if (os_memcmp(wpa_s->bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) != 0)
-	{
+	if (!is_zero_ether_addr(wpa_s->bssid)) {
 		if (wpa_s->use_client_mlme)
 			ieee80211_sta_deauthenticate(wpa_s, reason_code);
 		else
@@ -1170,11 +1245,10 @@ void wpa_supplicant_deauthenticate(struct wpa_supplicant *wpa_s,
 		addr = wpa_s->bssid;
 	}
 	wpa_clear_keys(wpa_s, addr);
+	wpa_supplicant_mark_disassoc(wpa_s);
 	wpa_s->current_ssid = NULL;
 	wpa_sm_set_config(wpa_s->wpa, NULL);
 	eapol_sm_notify_config(wpa_s->eapol, NULL, NULL);
-	eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
-	eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
 }
 
 
@@ -1363,7 +1437,7 @@ struct wpa_ssid * wpa_supplicant_get_ssid(struct wpa_supplicant *wpa_s)
 	}
 
 	wired = wpa_s->conf->ap_scan == 0 && wpa_s->driver &&
-		os_strcmp(wpa_s->driver->name, "wired") == 0;
+		IS_WIRED(wpa_s->driver);
 
 	entry = wpa_s->conf->ssid;
 	while (entry) {
@@ -1373,6 +1447,14 @@ struct wpa_ssid * wpa_supplicant_get_ssid(struct wpa_supplicant *wpa_s)
 		    (!entry->bssid_set ||
 		     os_memcmp(bssid, entry->bssid, ETH_ALEN) == 0))
 			return entry;
+#ifdef CONFIG_WPS
+		if (!entry->disabled &&
+		    (entry->key_mgmt & WPA_KEY_MGMT_WPS) &&
+		    (entry->ssid == NULL || entry->ssid_len == 0) &&
+		    (!entry->bssid_set ||
+		     os_memcmp(bssid, entry->bssid, ETH_ALEN) == 0))
+			return entry;
+#endif /* CONFIG_WPS */
 		entry = entry->next;
 	}
 
@@ -1397,12 +1479,14 @@ static int wpa_supplicant_set_driver(struct wpa_supplicant *wpa_s,
 	if (name == NULL) {
 		/* default to first driver in the list */
 		wpa_s->driver = wpa_supplicant_drivers[0];
+		wpa_s->global_drv_priv = wpa_s->global->drv_priv[0];
 		return 0;
 	}
 
 	for (i = 0; wpa_supplicant_drivers[i]; i++) {
 		if (os_strcmp(name, wpa_supplicant_drivers[i]->name) == 0) {
 			wpa_s->driver = wpa_supplicant_drivers[i];
+			wpa_s->global_drv_priv = wpa_s->global->drv_priv[i];
 			return 0;
 		}
 	}
@@ -1420,6 +1504,27 @@ void wpa_supplicant_rx_eapol(void *ctx, const u8 *src_addr,
 	wpa_printf(MSG_DEBUG, "RX EAPOL from " MACSTR, MAC2STR(src_addr));
 	wpa_hexdump(MSG_MSGDUMP, "RX EAPOL", buf, len);
 
+	if (wpa_s->wpa_state < WPA_ASSOCIATED) {
+		/*
+		 * There is possible race condition between receiving the
+		 * association event and the EAPOL frame since they are coming
+		 * through different paths from the driver. In order to avoid
+		 * issues in trying to process the EAPOL frame before receiving
+		 * association information, lets queue it for processing until
+		 * the association event is received.
+		 */
+		wpa_printf(MSG_DEBUG, "Not associated - Delay processing of "
+			   "received EAPOL frame");
+		wpabuf_free(wpa_s->pending_eapol_rx);
+		wpa_s->pending_eapol_rx = wpabuf_alloc_copy(buf, len);
+		if (wpa_s->pending_eapol_rx) {
+			os_get_time(&wpa_s->pending_eapol_rx_time);
+			os_memcpy(wpa_s->pending_eapol_rx_src, src_addr,
+				  ETH_ALEN);
+		}
+		return;
+	}
+
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_NONE) {
 		wpa_printf(MSG_DEBUG, "Ignored received EAPOL frame since "
 			   "no key management is configured");
@@ -1428,15 +1533,14 @@ void wpa_supplicant_rx_eapol(void *ctx, const u8 *src_addr,
 
 	if (wpa_s->eapol_received == 0 &&
 	    (!wpa_s->driver_4way_handshake ||
-	     (wpa_s->key_mgmt != WPA_KEY_MGMT_PSK &&
-	      wpa_s->key_mgmt != WPA_KEY_MGMT_FT_PSK) ||
+	     !wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt) ||
 	     wpa_s->wpa_state != WPA_COMPLETED)) {
 		/* Timeout for completing IEEE 802.1X and WPA authentication */
 		wpa_supplicant_req_auth_timeout(
 			wpa_s,
-			(wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X ||
+			(wpa_key_mgmt_wpa_ieee8021x(wpa_s->key_mgmt) ||
 			 wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X_NO_WPA ||
-			 wpa_s->key_mgmt == WPA_KEY_MGMT_FT_IEEE8021X) ?
+			 wpa_s->key_mgmt == WPA_KEY_MGMT_WPS) ?
 			70 : 10, 0);
 	}
 	wpa_s->eapol_received++;
@@ -1454,15 +1558,13 @@ void wpa_supplicant_rx_eapol(void *ctx, const u8 *src_addr,
 	 * still sent to the current BSSID (if available), though. */
 
 	os_memcpy(wpa_s->last_eapol_src, src_addr, ETH_ALEN);
-	if (wpa_s->key_mgmt != WPA_KEY_MGMT_PSK &&
-	    wpa_s->key_mgmt != WPA_KEY_MGMT_FT_PSK &&
+	if (!wpa_key_mgmt_wpa_psk(wpa_s->key_mgmt) &&
 	    eapol_sm_rx_eapol(wpa_s->eapol, src_addr, buf, len) > 0)
 		return;
 	wpa_drv_poll(wpa_s);
 	if (!wpa_s->driver_4way_handshake)
 		wpa_sm_rx_eapol(wpa_s->wpa, src_addr, buf, len);
-	else if (wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X ||
-		 wpa_s->key_mgmt == WPA_KEY_MGMT_FT_IEEE8021X) {
+	else if (wpa_key_mgmt_wpa_ieee8021x(wpa_s->key_mgmt)) {
 		/*
 		 * Set portValid = TRUE here since we are going to skip 4-way
 		 * handshake processing which would normally set portValid. We
@@ -1749,7 +1851,16 @@ static int wpa_supplicant_init_iface2(struct wpa_supplicant *wpa_s)
 	if (wpa_supplicant_driver_init(wpa_s) < 0)
 		return -1;
 
+	if (wpa_s->conf->country[0] && wpa_s->conf->country[1] &&
+	    wpa_drv_set_country(wpa_s, wpa_s->conf->country)) {
+		wpa_printf(MSG_DEBUG, "Failed to set country");
+		return -1;
+	}
+
 	wpa_sm_set_own_addr(wpa_s->wpa, wpa_s->own_addr);
+
+	if (wpas_wps_init(wpa_s))
+		return -1;
 
 	if (wpa_supplicant_init_eapol(wpa_s) < 0)
 		return -1;
@@ -1835,6 +1946,8 @@ struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
 	if (wpa_s == NULL)
 		return NULL;
 
+	wpa_s->global = global;
+
 	if (wpa_supplicant_init_iface(wpa_s, iface) ||
 	    wpa_supplicant_init_iface2(wpa_s)) {
 		wpa_printf(MSG_DEBUG, "Failed to add interface %s",
@@ -1844,15 +1957,13 @@ struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
 		return NULL;
 	}
 
-	wpa_s->global = global;
-
 	/* Register the interface with the dbus control interface */
 	if (wpas_dbus_register_iface(wpa_s)) {
 		wpa_supplicant_deinit_iface(wpa_s);
 		os_free(wpa_s);
 		return NULL;
 	}
-		
+
 	wpa_s->next = global->ifaces;
 	global->ifaces = wpa_s;
 
@@ -1930,7 +2041,7 @@ struct wpa_supplicant * wpa_supplicant_get_iface(struct wpa_global *global,
 struct wpa_global * wpa_supplicant_init(struct wpa_params *params)
 {
 	struct wpa_global *global;
-	int ret;
+	int ret, i;
 
 	if (params == NULL)
 		return NULL;
@@ -1985,6 +2096,30 @@ struct wpa_global * wpa_supplicant_init(struct wpa_params *params)
 		}
 	}
 
+	for (i = 0; wpa_supplicant_drivers[i]; i++)
+		global->drv_count++;
+	if (global->drv_count == 0) {
+		wpa_printf(MSG_ERROR, "No drivers enabled");
+		wpa_supplicant_deinit(global);
+		return NULL;
+	}
+	global->drv_priv = os_zalloc(global->drv_count * sizeof(void *));
+	if (global->drv_priv == NULL) {
+		wpa_supplicant_deinit(global);
+		return NULL;
+	}
+	for (i = 0; wpa_supplicant_drivers[i]; i++) {
+		if (!wpa_supplicant_drivers[i]->global_init)
+			continue;
+		global->drv_priv[i] = wpa_supplicant_drivers[i]->global_init();
+		if (global->drv_priv[i] == NULL) {
+			wpa_printf(MSG_ERROR, "Failed to initialize driver "
+				   "'%s'", wpa_supplicant_drivers[i]->name);
+			wpa_supplicant_deinit(global);
+			return NULL;
+		}
+	}
+
 	return global;
 }
 
@@ -2031,6 +2166,8 @@ int wpa_supplicant_run(struct wpa_global *global)
  */
 void wpa_supplicant_deinit(struct wpa_global *global)
 {
+	int i;
+
 	if (global == NULL)
 		return;
 
@@ -2043,6 +2180,13 @@ void wpa_supplicant_deinit(struct wpa_global *global)
 		wpa_supplicant_dbus_ctrl_iface_deinit(global->dbus_ctrl_iface);
 
 	eap_peer_unregister_methods();
+
+	for (i = 0; wpa_supplicant_drivers[i] && global->drv_priv; i++) {
+		if (!global->drv_priv[i])
+			continue;
+		wpa_supplicant_drivers[i]->global_deinit(global->drv_priv[i]);
+	}
+	os_free(global->drv_priv);
 
 	eloop_destroy();
 

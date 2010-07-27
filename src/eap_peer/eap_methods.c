@@ -427,6 +427,13 @@ int eap_peer_register_methods(void)
 	}
 #endif /* EAP_AKA */
 
+#ifdef EAP_AKA_PRIME
+	if (ret == 0) {
+		int eap_peer_aka_prime_register(void);
+		ret = eap_peer_aka_prime_register();
+	}
+#endif /* EAP_AKA_PRIME */
+
 #ifdef EAP_FAST
 	if (ret == 0) {
 		int eap_peer_fast_register(void);
@@ -454,6 +461,13 @@ int eap_peer_register_methods(void)
 		ret = eap_peer_gpsk_register();
 	}
 #endif /* EAP_GPSK */
+
+#ifdef EAP_WSC
+	if (ret == 0) {
+		int eap_peer_wsc_register(void);
+		ret = eap_peer_wsc_register();
+	}
+#endif /* EAP_WSC */
 
 #ifdef EAP_IKEV2
 	if (ret == 0) {

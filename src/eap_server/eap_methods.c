@@ -68,7 +68,7 @@ EapType eap_server_get_type(const char *name, int *vendor)
  * EAP_SERVER_METHOD_INTERFACE_VERSION)
  * @vendor: EAP Vendor-ID (EAP_VENDOR_*) (0 = IETF)
  * @method: EAP type number (EAP_TYPE_*)
- * name: Name of the method (e.g., "TLS")
+ * @name: Name of the method (e.g., "TLS")
  * Returns: Allocated EAP method structure or %NULL on failure
  *
  * The returned structure should be freed with eap_server_method_free() when it
@@ -212,6 +212,13 @@ int eap_server_register_methods(void)
 	}
 #endif /* EAP_AKA */
 
+#ifdef EAP_AKA_PRIME
+	if (ret == 0) {
+		int eap_server_aka_prime_register(void);
+		ret = eap_server_aka_prime_register();
+	}
+#endif /* EAP_AKA_PRIME */
+
 #ifdef EAP_PAX
 	if (ret == 0) {
 		int eap_server_pax_register(void);
@@ -254,12 +261,26 @@ int eap_server_register_methods(void)
 	}
 #endif /* EAP_FAST */
 
+#ifdef EAP_WSC
+	if (ret == 0) {
+		int eap_server_wsc_register(void);
+		ret = eap_server_wsc_register();
+	}
+#endif /* EAP_WSC */
+
 #ifdef EAP_IKEV2
 	if (ret == 0) {
 		int eap_server_ikev2_register(void);
 		ret = eap_server_ikev2_register();
 	}
 #endif /* EAP_IKEV2 */
+
+#ifdef EAP_TNC
+	if (ret == 0) {
+		int eap_server_tnc_register(void);
+		ret = eap_server_tnc_register();
+	}
+#endif /* EAP_TNC */
 
 	return ret;
 }

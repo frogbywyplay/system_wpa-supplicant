@@ -1,5 +1,5 @@
 /*
- * WPA Supplicant - driver interaction with Broadcom wl.o driver
+ * WPA Supplicant - driver interaction with old Broadcom wl.o driver
  * Copyright (c) 2004, Nikki Chumkov <nikki@gattaca.ru>
  * Copyright (c) 2004, Jouni Malinen <j@w1.fi>
  *
@@ -11,6 +11,10 @@
  * license.
  *
  * See README and COPYING for more details.
+ *
+ * Please note that the newer Broadcom driver ("hybrid Linux driver") supports
+ * Linux wireless extensions and does not need (or even work) with this old
+ * driver wrapper. Use driver_wext.c with that driver.
  */
 
 #include "includes.h"
@@ -488,8 +492,9 @@ wpa_driver_broadcom_get_scan_results(void *priv,
 		wbi = (wl_bss_info_t *) ((u8 *) wbi + wbi->length);
 	}
 
-	wpa_printf(MSG_MSGDUMP, "Received %d bytes of scan results (%d BSSes)",
-		   wsr->buflen, ap_num);
+	wpa_printf(MSG_MSGDUMP, "Received %d bytes of scan results (%lu "
+		   "BSSes)",
+		   wsr->buflen, (unsigned long) ap_num);
 	
 	os_free(buf);
 	return ap_num;

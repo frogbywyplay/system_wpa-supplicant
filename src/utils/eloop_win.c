@@ -320,6 +320,25 @@ int eloop_cancel_timeout(eloop_timeout_handler handler,
 }
 
 
+int eloop_is_timeout_registered(eloop_timeout_handler handler,
+				void *eloop_data, void *user_data)
+{
+	struct eloop_timeout *tmp;
+
+	tmp = eloop.timeout;
+	while (tmp != NULL) {
+		if (tmp->handler == handler &&
+		    tmp->eloop_data == eloop_data &&
+		    tmp->user_data == user_data)
+			return 1;
+
+		tmp = tmp->next;
+	}
+
+	return 0;
+}
+
+
 /* TODO: replace with suitable signal handler */
 #if 0
 static void eloop_handle_signal(int sig)
@@ -444,12 +463,11 @@ void eloop_run(void)
 	while (!eloop.terminate &&
 	       (eloop.timeout || eloop.reader_count > 0 ||
 		eloop.event_count > 0)) {
+		tv.sec = tv.usec = 0;
 		if (eloop.timeout) {
 			os_get_time(&now);
 			if (os_time_before(&now, &eloop.timeout->time))
 				os_time_sub(&eloop.timeout->time, &now, &tv);
-			else
-				tv.sec = tv.usec = 0;
 		}
 
 		count = 0;

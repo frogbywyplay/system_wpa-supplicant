@@ -25,11 +25,20 @@ struct radius_server_conf {
 	void *eap_sim_db_priv;
 	void *ssl_ctx;
 	u8 *pac_opaque_encr_key;
-	char *eap_fast_a_id;
+	u8 *eap_fast_a_id;
+	size_t eap_fast_a_id_len;
+	char *eap_fast_a_id_info;
+	int eap_fast_prov;
+	int pac_key_lifetime;
+	int pac_key_refresh_time;
 	int eap_sim_aka_result_ind;
+	int tnc;
+	struct wps_context *wps;
 	int ipv6;
 	int (*get_eap_user)(void *ctx, const u8 *identity, size_t identity_len,
 			    int phase2, struct eap_user *user);
+	const char *eap_req_id_text;
+	size_t eap_req_id_text_len;
 };
 
 

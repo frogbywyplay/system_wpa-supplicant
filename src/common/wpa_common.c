@@ -56,10 +56,10 @@ int wpa_eapol_key_mic(const u8 *key, int ver, const u8 *buf, size_t len,
 		hmac_sha1(key, 16, buf, len, hash);
 		os_memcpy(mic, hash, MD5_MAC_LEN);
 		break;
-#ifdef CONFIG_IEEE80211R
+#if defined(CONFIG_IEEE80211R) || defined(CONFIG_IEEE80211W)
 	case WPA_KEY_INFO_TYPE_AES_128_CMAC:
 		return omac1_aes_128(key, buf, len, mic);
-#endif /* CONFIG_IEEE80211R */
+#endif /* CONFIG_IEEE80211R || CONFIG_IEEE80211W */
 	default:
 		return -1;
 	}
@@ -79,6 +79,7 @@ int wpa_eapol_key_mic(const u8 *key, int ver, const u8 *buf, size_t len,
  * @nonce2: SNonce or ANonce
  * @ptk: Buffer for pairwise transient key
  * @ptk_len: Length of PTK
+ * @use_sha256: Whether to use SHA256-based KDF
  *
  * IEEE Std 802.11i-2004 - 8.5.1.2 Pairwise key hierarchy
  * PTK = PRF-X(PMK, "Pairwise key expansion",
@@ -92,7 +93,7 @@ int wpa_eapol_key_mic(const u8 *key, int ver, const u8 *buf, size_t len,
 void wpa_pmk_to_ptk(const u8 *pmk, size_t pmk_len, const char *label,
 		    const u8 *addr1, const u8 *addr2,
 		    const u8 *nonce1, const u8 *nonce2,
-		    u8 *ptk, size_t ptk_len)
+		    u8 *ptk, size_t ptk_len, int use_sha256)
 {
 	u8 data[2 * ETH_ALEN + 2 * WPA_NONCE_LEN];
 
@@ -114,7 +115,14 @@ void wpa_pmk_to_ptk(const u8 *pmk, size_t pmk_len, const char *label,
 			  WPA_NONCE_LEN);
 	}
 
-	sha1_prf(pmk, pmk_len, label, data, sizeof(data), ptk, ptk_len);
+#ifdef CONFIG_IEEE80211W
+	if (use_sha256)
+		sha256_prf(pmk, pmk_len, label, data, sizeof(data),
+			   ptk, ptk_len);
+	else
+#endif /* CONFIG_IEEE80211W */
+		sha1_prf(pmk, pmk_len, label, data, sizeof(data), ptk,
+			 ptk_len);
 
 	wpa_printf(MSG_DEBUG, "WPA: PTK derivation - A1=" MACSTR " A2=" MACSTR,
 		   MAC2STR(addr1), MAC2STR(addr2));
@@ -214,6 +222,12 @@ static int rsn_key_mgmt_to_bitfield(const u8 *s)
 	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_FT_PSK)
 		return WPA_KEY_MGMT_FT_PSK;
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_IEEE80211W
+	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_802_1X_SHA256)
+		return WPA_KEY_MGMT_IEEE8021X_SHA256;
+	if (RSN_SELECTOR_GET(s) == RSN_AUTH_KEY_MGMT_PSK_SHA256)
+		return WPA_KEY_MGMT_PSK_SHA256;
+#endif /* CONFIG_IEEE80211W */
 	return 0;
 }
 #endif /* CONFIG_NO_WPA2 */
@@ -394,7 +408,7 @@ int wpa_parse_wpa_ie_rsn(const u8 *rsn_ie, size_t rsn_ie_len,
 /**
  * wpa_derive_pmk_r0 - Derive PMK-R0 and PMKR0Name
  *
- * IEEE 802.11r/D9.0 - 8.5.1.5.3
+ * IEEE Std 802.11r-2008 - 8.5.1.5.3
  */
 void wpa_derive_pmk_r0(const u8 *xxkey, size_t xxkey_len,
 		       const u8 *ssid, size_t ssid_len,
@@ -449,7 +463,7 @@ void wpa_derive_pmk_r0(const u8 *xxkey, size_t xxkey_len,
 /**
  * wpa_derive_pmk_r1_name - Derive PMKR1Name
  *
- * IEEE 802.11r/D9.0 - 8.5.1.5.4
+ * IEEE Std 802.11r-2008 - 8.5.1.5.4
  */
 void wpa_derive_pmk_r1_name(const u8 *pmk_r0_name, const u8 *r1kh_id,
 			    const u8 *s1kh_id, u8 *pmk_r1_name)
@@ -479,7 +493,7 @@ void wpa_derive_pmk_r1_name(const u8 *pmk_r0_name, const u8 *r1kh_id,
 /**
  * wpa_derive_pmk_r1 - Derive PMK-R1 and PMKR1Name from PMK-R0
  *
- * IEEE 802.11r/D9.0 - 8.5.1.5.4
+ * IEEE Std 802.11r-2008 - 8.5.1.5.4
  */
 void wpa_derive_pmk_r1(const u8 *pmk_r0, const u8 *pmk_r0_name,
 		       const u8 *r1kh_id, const u8 *s1kh_id,
@@ -504,7 +518,7 @@ void wpa_derive_pmk_r1(const u8 *pmk_r0, const u8 *pmk_r0_name,
 /**
  * wpa_pmk_r1_to_ptk - Derive PTK and PTKName from PMK-R1
  *
- * IEEE 802.11r/D9.0 - 8.5.1.5.5
+ * IEEE Std 802.11r-2008 - 8.5.1.5.5
  */
 void wpa_pmk_r1_to_ptk(const u8 *pmk_r1, const u8 *snonce, const u8 *anonce,
 		       const u8 *sta_addr, const u8 *bssid,

@@ -42,6 +42,8 @@ public slots:
 	virtual void encrChanged(const QString &sel);
 	virtual void writeWepKey(int network_id, QLineEdit *edit, int id);
 	virtual void removeNetwork();
+	virtual void eapChanged(int sel);
+	virtual void useWps();
 
 protected slots:
 	virtual void languageChange();
@@ -50,6 +52,7 @@ private:
 	WpaGui *wpagui;
 	int edit_network_id;
 	bool new_network;
+	QString bssid;
 
 	virtual void wepEnabled(bool enabled);
 	virtual void getEapCapa();

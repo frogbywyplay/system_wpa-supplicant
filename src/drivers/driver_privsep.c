@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant - privilege separated driver interface
- * Copyright (c) 2007, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2007-2009, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -443,6 +443,22 @@ static void wpa_driver_privsep_event_rx_eapol(void *ctx, u8 *buf, size_t len)
 }
 
 
+static void wpa_driver_privsep_event_sta_rx(void *ctx, u8 *buf, size_t len)
+{
+#ifdef CONFIG_CLIENT_MLME
+	struct ieee80211_rx_status *rx_status;
+
+	if (len < sizeof(*rx_status))
+		return;
+	rx_status = (struct ieee80211_rx_status *) buf;
+	buf += sizeof(*rx_status);
+	len -= sizeof(*rx_status);
+
+	wpa_supplicant_sta_rx(ctx, buf, len, rx_status);
+#endif /* CONFIG_CLIENT_MLME */
+}
+
+
 static void wpa_driver_privsep_receive(int sock, void *eloop_ctx,
 				       void *sock_ctx)
 {
@@ -476,8 +492,8 @@ static void wpa_driver_privsep_receive(int sock, void *eloop_ctx,
 	os_memcpy(&event, buf, sizeof(int));
 	event_buf = &buf[sizeof(int)];
 	event_len = res - sizeof(int);
-	wpa_printf(MSG_DEBUG, "privsep: Event %d received (len=%d)",
-		   event, event_len);
+	wpa_printf(MSG_DEBUG, "privsep: Event %d received (len=%lu)",
+		   event, (unsigned long) event_len);
 
 	e = event;
 	switch (e) {
@@ -518,6 +534,11 @@ static void wpa_driver_privsep_receive(int sock, void *eloop_ctx,
 	case PRIVSEP_EVENT_RX_EAPOL:
 		wpa_driver_privsep_event_rx_eapol(drv->ctx, event_buf,
 						  event_len);
+		break;
+	case PRIVSEP_EVENT_STA_RX:
+		wpa_driver_privsep_event_sta_rx(drv->ctx, event_buf,
+						event_len);
+		break;
 	}
 
 	os_free(buf);
@@ -726,6 +747,24 @@ static const u8 * wpa_driver_privsep_get_mac_addr(void *priv)
 }
 
 
+static int wpa_driver_privsep_set_mode(void *priv, int mode)
+{
+	struct wpa_driver_privsep_data *drv = priv;
+	wpa_printf(MSG_DEBUG, "%s mode=%d", __func__, mode);
+	return wpa_priv_cmd(drv, PRIVSEP_CMD_SET_MODE, &mode, sizeof(mode),
+			    NULL, NULL);
+}
+
+
+static int wpa_driver_privsep_set_country(void *priv, const char *alpha2)
+{
+	struct wpa_driver_privsep_data *drv = priv;
+	wpa_printf(MSG_DEBUG, "%s country='%s'", __func__, alpha2);
+	return wpa_priv_cmd(drv, PRIVSEP_CMD_SET_COUNTRY, alpha2,
+			    os_strlen(alpha2), NULL, NULL);
+}
+
+
 struct wpa_driver_ops wpa_driver_privsep_ops = {
 	"privsep",
 	"wpa_supplicant privilege separated driver",
@@ -763,7 +802,14 @@ struct wpa_driver_ops wpa_driver_privsep_ops = {
 	NULL /* mlme_remove_sta */,
 	NULL /* update_ft_ies */,
 	NULL /* send_ft_action */,
-	wpa_driver_privsep_get_scan_results2
+	wpa_driver_privsep_get_scan_results2,
+	NULL /* set_probe_req_ie */,
+	wpa_driver_privsep_set_mode,
+	wpa_driver_privsep_set_country,
+	NULL /* global_init */,
+	NULL /* global_deinit */,
+	NULL /* init2 */,
+	NULL /* get_interfaces */
 };
 
 

@@ -265,6 +265,10 @@ int tls_prf(const u8 *secret, size_t secret_len, const char *label,
 	L_S1 = L_S2 = (secret_len + 1) / 2;
 	S1 = secret;
 	S2 = secret + L_S1;
+	if (secret_len & 1) {
+		/* The last byte of S1 will be shared with S2 */
+		S2--;
+	}
 
 	hmac_md5_vector(S1, L_S1, 2, &MD5_addr[1], &MD5_len[1], A_MD5);
 	hmac_sha1_vector(S2, L_S2, 2, &SHA1_addr[1], &SHA1_len[1], A_SHA1);
@@ -341,7 +345,7 @@ static void pbkdf2_sha1_f(const char *passphrase, const char *ssid,
  * @passphrase: ASCII passphrase
  * @ssid: SSID
  * @ssid_len: SSID length in bytes
- * @interations: Number of iterations to run
+ * @iterations: Number of iterations to run
  * @buf: Buffer for the generated key
  * @buflen: Length of the buffer in bytes
  *
@@ -602,8 +606,8 @@ static void SHA1Transform(u32 state[5], const unsigned char buffer[64])
 	} CHAR64LONG16;
 	CHAR64LONG16* block;
 #ifdef SHA1HANDSOFF
-	u32 workspace[16];
-	block = (CHAR64LONG16 *) workspace;
+	CHAR64LONG16 workspace;
+	block = &workspace;
 	os_memcpy(block, buffer, 64);
 #else
 	block = (CHAR64LONG16 *) buffer;

@@ -573,6 +573,13 @@ SM_STATE(EAP, SUCCESS2)
 	}
 
 	sm->eap_if.eapSuccess = TRUE;
+
+	/*
+	 * Start reauthentication with identity request even though we know the
+	 * previously used identity. This is needed to get reauthentication
+	 * started properly.
+	 */
+	sm->start_reauth = TRUE;
 }
 
 
@@ -792,10 +799,51 @@ static int eap_sm_calculateTimeout(struct eap_sm *sm, int retransCount,
 				   int eapSRTT, int eapRTTVAR,
 				   int methodTimeout)
 {
-	/* For now, retransmission is done in EAPOL state machines, so make
-	 * sure EAP state machine does not end up trying to retransmit packets.
+	int rto, i;
+
+	if (methodTimeout) {
+		/*
+		 * EAP method (either internal or through AAA server, provided
+		 * timeout hint. Use that as-is as a timeout for retransmitting
+		 * the EAP request if no response is received.
+		 */
+		wpa_printf(MSG_DEBUG, "EAP: retransmit timeout %d seconds "
+			   "(from EAP method hint)", methodTimeout);
+		return methodTimeout;
+	}
+
+	/*
+	 * RFC 3748 recommends algorithms described in RFC 2988 for estimation
+	 * of the retransmission timeout. This should be implemented once
+	 * round-trip time measurements are available. For nowm a simple
+	 * backoff mechanism is used instead if there are no EAP method
+	 * specific hints.
+	 *
+	 * SRTT = smoothed round-trip time
+	 * RTTVAR = round-trip time variation
+	 * RTO = retransmission timeout
 	 */
-	return 1;
+
+	/*
+	 * RFC 2988, 2.1: before RTT measurement, set RTO to 3 seconds for
+	 * initial retransmission and then double the RTO to provide back off
+	 * per 5.5. Limit the maximum RTO to 20 seconds per RFC 3748, 4.3
+	 * modified RTOmax.
+	 */
+	rto = 3;
+	for (i = 0; i < retransCount; i++) {
+		rto *= 2;
+		if (rto >= 20) {
+			rto = 20;
+			break;
+		}
+	}
+
+	wpa_printf(MSG_DEBUG, "EAP: retransmit timeout %d seconds "
+		   "(from dynamic back off; retransCount=%d)",
+		   rto, retransCount);
+
+	return rto;
 }
 
 
@@ -1029,7 +1077,7 @@ static EapType eap_sm_Policy_getNextMethod(struct eap_sm *sm, int *vendor)
 
 static int eap_sm_Policy_getDecision(struct eap_sm *sm)
 {
-	if (!sm->eap_server && sm->identity) {
+	if (!sm->eap_server && sm->identity && !sm->start_reauth) {
 		wpa_printf(MSG_DEBUG, "EAP: getDecision: -> PASSTHROUGH");
 		return DECISION_PASSTHROUGH;
 	}
@@ -1050,14 +1098,35 @@ static int eap_sm_Policy_getDecision(struct eap_sm *sm)
 		return DECISION_FAILURE;
 	}
 
-	if ((sm->user == NULL || sm->update_user) && sm->identity) {
+	if ((sm->user == NULL || sm->update_user) && sm->identity &&
+	    !sm->start_reauth) {
+		/*
+		 * Allow Identity method to be started once to allow identity
+		 * selection hint to be sent from the authentication server,
+		 * but prevent a loop of Identity requests by only allowing
+		 * this to happen once.
+		 */
+		int id_req = 0;
+		if (sm->user && sm->currentMethod == EAP_TYPE_IDENTITY &&
+		    sm->user->methods[0].vendor == EAP_VENDOR_IETF &&
+		    sm->user->methods[0].method == EAP_TYPE_IDENTITY)
+			id_req = 1;
 		if (eap_user_get(sm, sm->identity, sm->identity_len, 0) != 0) {
 			wpa_printf(MSG_DEBUG, "EAP: getDecision: user not "
 				   "found from database -> FAILURE");
 			return DECISION_FAILURE;
 		}
+		if (id_req && sm->user &&
+		    sm->user->methods[0].vendor == EAP_VENDOR_IETF &&
+		    sm->user->methods[0].method == EAP_TYPE_IDENTITY) {
+			wpa_printf(MSG_DEBUG, "EAP: getDecision: stop "
+				   "identity request loop -> FAILURE");
+			sm->update_user = TRUE;
+			return DECISION_FAILURE;
+		}
 		sm->update_user = FALSE;
 	}
+	sm->start_reauth = FALSE;
 
 	if (sm->user && sm->user_eap_method_index < EAP_MAX_METHODS &&
 	    (sm->user->methods[sm->user_eap_method_index].vendor !=
@@ -1139,7 +1208,7 @@ struct eap_sm * eap_server_sm_init(void *eapol_ctx,
 		return NULL;
 	sm->eapol_ctx = eapol_ctx;
 	sm->eapol_cb = eapol_cb;
-	sm->MaxRetrans = 10;
+	sm->MaxRetrans = 5; /* RFC 3748: max 3-5 retransmissions suggested */
 	sm->ssl_ctx = conf->ssl_ctx;
 	sm->eap_sim_db_priv = conf->eap_sim_db_priv;
 	sm->backend_auth = conf->backend_auth;
@@ -1151,9 +1220,24 @@ struct eap_sm * eap_server_sm_init(void *eapol_ctx,
 				  conf->pac_opaque_encr_key, 16);
 		}
 	}
-	if (conf->eap_fast_a_id)
-		sm->eap_fast_a_id = os_strdup(conf->eap_fast_a_id);
+	if (conf->eap_fast_a_id) {
+		sm->eap_fast_a_id = os_malloc(conf->eap_fast_a_id_len);
+		if (sm->eap_fast_a_id) {
+			os_memcpy(sm->eap_fast_a_id, conf->eap_fast_a_id,
+				  conf->eap_fast_a_id_len);
+			sm->eap_fast_a_id_len = conf->eap_fast_a_id_len;
+		}
+	}
+	if (conf->eap_fast_a_id_info)
+		sm->eap_fast_a_id_info = os_strdup(conf->eap_fast_a_id_info);
+	sm->eap_fast_prov = conf->eap_fast_prov;
+	sm->pac_key_lifetime = conf->pac_key_lifetime;
+	sm->pac_key_refresh_time = conf->pac_key_refresh_time;
 	sm->eap_sim_aka_result_ind = conf->eap_sim_aka_result_ind;
+	sm->tnc = conf->tnc;
+	sm->wps = conf->wps;
+	if (conf->assoc_wps_ie)
+		sm->assoc_wps_ie = wpabuf_dup(conf->assoc_wps_ie);
 
 	wpa_printf(MSG_DEBUG, "EAP: Server state machine created");
 
@@ -1177,15 +1261,17 @@ void eap_server_sm_deinit(struct eap_sm *sm)
 		sm->m->reset(sm, sm->eap_method_priv);
 	wpabuf_free(sm->eap_if.eapReqData);
 	os_free(sm->eap_if.eapKeyData);
-	os_free(sm->lastReqData);
+	wpabuf_free(sm->lastReqData);
 	wpabuf_free(sm->eap_if.eapRespData);
 	os_free(sm->identity);
 	os_free(sm->pac_opaque_encr_key);
 	os_free(sm->eap_fast_a_id);
+	os_free(sm->eap_fast_a_id_info);
 	wpabuf_free(sm->eap_if.aaaEapReqData);
 	wpabuf_free(sm->eap_if.aaaEapRespData);
 	os_free(sm->eap_if.aaaEapKeyData);
 	eap_user_free(sm->user);
+	wpabuf_free(sm->assoc_wps_ie);
 	os_free(sm);
 }
 

@@ -85,13 +85,22 @@ struct radius_server_data {
 	void *eap_sim_db_priv;
 	void *ssl_ctx;
 	u8 *pac_opaque_encr_key;
-	char *eap_fast_a_id;
+	u8 *eap_fast_a_id;
+	size_t eap_fast_a_id_len;
+	char *eap_fast_a_id_info;
+	int eap_fast_prov;
+	int pac_key_lifetime;
+	int pac_key_refresh_time;
 	int eap_sim_aka_result_ind;
+	int tnc;
+	struct wps_context *wps;
 	int ipv6;
 	struct os_time start_time;
 	struct radius_server_counters counters;
 	int (*get_eap_user)(void *ctx, const u8 *identity, size_t identity_len,
 			    int phase2, struct eap_user *user);
+	char *eap_req_id_text;
+	size_t eap_req_id_text_len;
 };
 
 
@@ -108,7 +117,8 @@ wpa_hexdump_ascii(MSG_MSGDUMP, "RADIUS SRV: " args)
 
 
 static void radius_server_session_timeout(void *eloop_ctx, void *timeout_ctx);
-
+static void radius_server_session_remove_timeout(void *eloop_ctx,
+						 void *timeout_ctx);
 
 
 static struct radius_client *
@@ -170,6 +180,7 @@ static void radius_server_session_free(struct radius_server_data *data,
 				       struct radius_session *sess)
 {
 	eloop_cancel_timeout(radius_server_session_timeout, data, sess);
+	eloop_cancel_timeout(radius_server_session_remove_timeout, data, sess);
 	eap_server_sm_deinit(sess->eap);
 	if (sess->last_msg) {
 		radius_msg_free(sess->last_msg);
@@ -184,9 +195,6 @@ static void radius_server_session_free(struct radius_server_data *data,
 	data->num_sess--;
 }
 
-
-static void radius_server_session_remove_timeout(void *eloop_ctx,
-						 void *timeout_ctx);
 
 static void radius_server_session_remove(struct radius_server_data *data,
 					 struct radius_session *sess)
@@ -310,7 +318,14 @@ radius_server_get_new_session(struct radius_server_data *data,
 	eap_conf.eap_server = 1;
 	eap_conf.pac_opaque_encr_key = data->pac_opaque_encr_key;
 	eap_conf.eap_fast_a_id = data->eap_fast_a_id;
+	eap_conf.eap_fast_a_id_len = data->eap_fast_a_id_len;
+	eap_conf.eap_fast_a_id_info = data->eap_fast_a_id_info;
+	eap_conf.eap_fast_prov = data->eap_fast_prov;
+	eap_conf.pac_key_lifetime = data->pac_key_lifetime;
+	eap_conf.pac_key_refresh_time = data->pac_key_refresh_time;
 	eap_conf.eap_sim_aka_result_ind = data->eap_sim_aka_result_ind;
+	eap_conf.tnc = data->tnc;
+	eap_conf.wps = data->wps;
 	sess->eap = eap_server_sm_init(sess, &radius_server_eapol_cb,
 				       &eap_conf);
 	if (sess->eap == NULL) {
@@ -477,6 +492,7 @@ static int radius_server_request(struct radius_server_data *data,
 	unsigned int state;
 	struct radius_session *sess;
 	struct radius_msg *reply;
+	int is_complete = 0;
 
 	if (force_sess)
 		sess = force_sess;
@@ -587,6 +603,9 @@ static int radius_server_request(struct radius_server_data *data,
 		return -1;
 	}
 
+	if (sess->eap_if->eapSuccess || sess->eap_if->eapFail)
+		is_complete = 1;
+
 	reply = radius_server_encapsulate_eap(data, client, sess, msg);
 
 	if (reply) {
@@ -628,7 +647,7 @@ static int radius_server_request(struct radius_server_data *data,
 		client->counters.packets_dropped++;
 	}
 
-	if (sess->eap_if->eapSuccess || sess->eap_if->eapFail) {
+	if (is_complete) {
 		RADIUS_DEBUG("Removing completed session 0x%x after timeout",
 			     sess->sess_id);
 		eloop_cancel_timeout(radius_server_session_remove_timeout,
@@ -647,7 +666,13 @@ static void radius_server_receive_auth(int sock, void *eloop_ctx,
 {
 	struct radius_server_data *data = eloop_ctx;
 	u8 *buf = NULL;
-	struct sockaddr_storage from;
+	union {
+		struct sockaddr_storage ss;
+		struct sockaddr_in sin;
+#ifdef CONFIG_IPV6
+		struct sockaddr_in6 sin6;
+#endif /* CONFIG_IPV6 */
+	} from;
 	socklen_t fromlen;
 	int len;
 	struct radius_client *client = NULL;
@@ -662,7 +687,7 @@ static void radius_server_receive_auth(int sock, void *eloop_ctx,
 
 	fromlen = sizeof(from);
 	len = recvfrom(sock, buf, RADIUS_MAX_MSG_LEN, 0,
-		       (struct sockaddr *) &from, &fromlen);
+		       (struct sockaddr *) &from.ss, &fromlen);
 	if (len < 0) {
 		perror("recvfrom[radius_server]");
 		goto fail;
@@ -670,28 +695,26 @@ static void radius_server_receive_auth(int sock, void *eloop_ctx,
 
 #ifdef CONFIG_IPV6
 	if (data->ipv6) {
-		struct sockaddr_in6 *from6 = (struct sockaddr_in6 *) &from;
-		if (inet_ntop(AF_INET6, &from6->sin6_addr, abuf, sizeof(abuf))
-		    == NULL)
+		if (inet_ntop(AF_INET6, &from.sin6.sin6_addr, abuf,
+			      sizeof(abuf)) == NULL)
 			abuf[0] = '\0';
-		from_port = ntohs(from6->sin6_port);
+		from_port = ntohs(from.sin6.sin6_port);
 		RADIUS_DEBUG("Received %d bytes from %s:%d",
 			     len, abuf, from_port);
 
 		client = radius_server_get_client(data,
 						  (struct in_addr *)
-						  &from6->sin6_addr, 1);
+						  &from.sin6.sin6_addr, 1);
 	}
 #endif /* CONFIG_IPV6 */
 
 	if (!data->ipv6) {
-		struct sockaddr_in *from4 = (struct sockaddr_in *) &from;
-		os_strlcpy(abuf, inet_ntoa(from4->sin_addr), sizeof(abuf));
-		from_port = ntohs(from4->sin_port);
+		os_strlcpy(abuf, inet_ntoa(from.sin.sin_addr), sizeof(abuf));
+		from_port = ntohs(from.sin.sin_port);
 		RADIUS_DEBUG("Received %d bytes from %s:%d",
 			     len, abuf, from_port);
 
-		client = radius_server_get_client(data, &from4->sin_addr, 0);
+		client = radius_server_get_client(data, &from.sin.sin_addr, 0);
 	}
 
 	RADIUS_DUMP("Received data", buf, len);
@@ -749,6 +772,22 @@ fail:
 }
 
 
+static int radius_server_disable_pmtu_discovery(int s)
+{
+	int r = -1;
+#if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
+	/* Turn off Path MTU discovery on IPv4/UDP sockets. */
+	int action = IP_PMTUDISC_DONT;
+	r = setsockopt(s, IPPROTO_IP, IP_MTU_DISCOVER, &action,
+		       sizeof(action));
+	if (r == -1)
+		wpa_printf(MSG_ERROR, "Failed to set IP_MTU_DISCOVER: "
+			   "%s", strerror(errno));
+#endif
+	return r;
+}
+
+
 static int radius_server_open_socket(int port)
 {
 	int s;
@@ -759,6 +798,8 @@ static int radius_server_open_socket(int port)
 		perror("socket");
 		return -1;
 	}
+
+	radius_server_disable_pmtu_discovery(s);
 
 	os_memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -1012,10 +1053,31 @@ radius_server_init(struct radius_server_conf *conf)
 		os_memcpy(data->pac_opaque_encr_key, conf->pac_opaque_encr_key,
 			  16);
 	}
-	if (conf->eap_fast_a_id)
-		data->eap_fast_a_id = os_strdup(conf->eap_fast_a_id);
+	if (conf->eap_fast_a_id) {
+		data->eap_fast_a_id = os_malloc(conf->eap_fast_a_id_len);
+		if (data->eap_fast_a_id) {
+			os_memcpy(data->eap_fast_a_id, conf->eap_fast_a_id,
+				  conf->eap_fast_a_id_len);
+			data->eap_fast_a_id_len = conf->eap_fast_a_id_len;
+		}
+	}
+	if (conf->eap_fast_a_id_info)
+		data->eap_fast_a_id_info = os_strdup(conf->eap_fast_a_id_info);
+	data->eap_fast_prov = conf->eap_fast_prov;
+	data->pac_key_lifetime = conf->pac_key_lifetime;
+	data->pac_key_refresh_time = conf->pac_key_refresh_time;
 	data->get_eap_user = conf->get_eap_user;
 	data->eap_sim_aka_result_ind = conf->eap_sim_aka_result_ind;
+	data->tnc = conf->tnc;
+	data->wps = conf->wps;
+	if (conf->eap_req_id_text) {
+		data->eap_req_id_text = os_malloc(conf->eap_req_id_text_len);
+		if (data->eap_req_id_text) {
+			os_memcpy(data->eap_req_id_text, conf->eap_req_id_text,
+				  conf->eap_req_id_text_len);
+			data->eap_req_id_text_len = conf->eap_req_id_text_len;
+		}
+	}
 
 	data->clients = radius_server_read_clients(conf->client_file,
 						   conf->ipv6);
@@ -1062,6 +1124,8 @@ void radius_server_deinit(struct radius_server_data *data)
 
 	os_free(data->pac_opaque_encr_key);
 	os_free(data->eap_fast_a_id);
+	os_free(data->eap_fast_a_id_info);
+	os_free(data->eap_req_id_text);
 	os_free(data);
 }
 
@@ -1189,9 +1253,19 @@ static int radius_server_get_eap_user(void *ctx, const u8 *identity,
 }
 
 
+static const char * radius_server_get_eap_req_id_text(void *ctx, size_t *len)
+{
+	struct radius_session *sess = ctx;
+	struct radius_server_data *data = sess->server;
+	*len = data->eap_req_id_text_len;
+	return data->eap_req_id_text;
+}
+
+
 static struct eapol_callbacks radius_server_eapol_cb =
 {
 	.get_eap_user = radius_server_get_eap_user,
+	.get_eap_req_id_text = radius_server_get_eap_req_id_text,
 };
 
 

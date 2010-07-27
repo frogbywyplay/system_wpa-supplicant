@@ -76,12 +76,47 @@ int os_mktime(int year, int month, int day, int hour, int min, int sec,
 }
 
 
+#ifdef __APPLE__
+#include <fcntl.h>
+static int os_daemon(int nochdir, int noclose)
+{
+	int devnull;
+
+	if (chdir("/") < 0)
+		return -1;
+
+	devnull = open("/dev/null", O_RDWR);
+	if (devnull < 0)
+		return -1;
+
+	if (dup2(devnull, STDIN_FILENO) < 0) {
+		close(devnull);
+		return -1;
+	}
+
+	if (dup2(devnull, STDOUT_FILENO) < 0) {
+		close(devnull);
+		return -1;
+	}
+
+	if (dup2(devnull, STDERR_FILENO) < 0) {
+		close(devnull);
+		return -1;
+	}
+
+	return 0;
+}
+#else /* __APPLE__ */
+#define os_daemon daemon
+#endif /* __APPLE__ */
+
+
 int os_daemonize(const char *pid_file)
 {
-#ifdef __unclinux
+#ifdef __uClinux__
 	return -1;
-#else /* __uclinux */
-	if (daemon(0, 0)) {
+#else /* __uClinux__ */
+	if (os_daemon(0, 0)) {
 		perror("daemon");
 		return -1;
 	}
@@ -95,7 +130,7 @@ int os_daemonize(const char *pid_file)
 	}
 
 	return -0;
-#endif /* __uclinux */
+#endif /* __uClinux__ */
 }
 
 
@@ -192,7 +227,8 @@ int os_setenv(const char *name, const char *value, int overwrite)
 
 int os_unsetenv(const char *name)
 {
-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__APPLE__) || \
+    defined(__OpenBSD__)
 	unsetenv(name);
 	return 0;
 #else
@@ -220,7 +256,12 @@ char * os_readfile(const char *name, size_t *len)
 		return NULL;
 	}
 
-	fread(buf, 1, *len, f);
+	if (fread(buf, 1, *len, f) != *len) {
+		fclose(f);
+		free(buf);
+		return NULL;
+	}
+
 	fclose(f);
 
 	return buf;

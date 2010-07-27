@@ -115,6 +115,7 @@ struct l2_packet_data * l2_packet_init(
 		os_free(l2);
 		return NULL;
 	}
+	os_memset(&ifr, 0, sizeof(ifr));
 	os_strlcpy(ifr.ifr_name, l2->ifname, sizeof(ifr.ifr_name));
 	if (ioctl(l2->fd, SIOCGIFINDEX, &ifr) < 0) {
 		perror("ioctl[SIOCGIFINDEX]");
@@ -184,7 +185,7 @@ int l2_packet_get_ip_addr(struct l2_packet_data *l2, char *buf, size_t len)
 		return -1;
 	}
 	close(s);
-	saddr = (struct sockaddr_in *) &ifr.ifr_addr;
+	saddr = aliasing_hide_typecast(&ifr.ifr_addr, struct sockaddr_in);
 	if (saddr->sin_family != AF_INET)
 		return -1;
 	res = os_strlcpy(buf, inet_ntoa(saddr->sin_addr), len);

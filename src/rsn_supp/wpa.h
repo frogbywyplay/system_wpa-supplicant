@@ -36,8 +36,6 @@ struct wpa_sm_ctx {
 
 	void (*set_state)(void *ctx, wpa_states state);
 	wpa_states (*get_state)(void *ctx);
-	void (*req_scan)(void *ctx, int sec, int usec);
-	void (*cancel_scan)(void *ctx);
 	void (*deauthenticate)(void * ctx, int reason_code); 
 	void (*disassociate)(void *ctx, int reason_code);
 	int (*set_key)(void *ctx, wpa_alg alg,
@@ -87,6 +85,7 @@ struct rsn_supp_config {
 	void *eap_conf_ctx;
 	const u8 *ssid;
 	size_t ssid_len;
+	int wpa_ptk_rekey;
 };
 
 #ifndef CONFIG_NO_WPA
@@ -280,7 +279,7 @@ int wpa_ft_process_response(struct wpa_sm *sm, const u8 *ies, size_t ies_len,
 			    int ft_action, const u8 *target_ap);
 int wpa_ft_is_completed(struct wpa_sm *sm);
 int wpa_ft_validate_reassoc_resp(struct wpa_sm *sm, const u8 *ies,
-				 size_t ies_len);
+				 size_t ies_len, const u8 *src_addr);
 int wpa_ft_start_over_ds(struct wpa_sm *sm, const u8 *target_ap);
 
 #else /* CONFIG_IEEE80211R */
@@ -310,7 +309,8 @@ static inline int wpa_ft_is_completed(struct wpa_sm *sm)
 }
 
 static inline int
-wpa_ft_validate_reassoc_resp(struct wpa_sm *sm, const u8 *ies, size_t ies_len)
+wpa_ft_validate_reassoc_resp(struct wpa_sm *sm, const u8 *ies, size_t ies_len,
+			     const u8 *src_addr)
 {
 	return -1;
 }

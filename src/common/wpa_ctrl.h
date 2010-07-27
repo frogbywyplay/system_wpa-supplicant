@@ -49,6 +49,32 @@ extern "C" {
 /** New scan results available */
 #define WPA_EVENT_SCAN_RESULTS "CTRL-EVENT-SCAN-RESULTS "
 
+/** WPS overlap detected in PBC mode */
+#define WPS_EVENT_OVERLAP "WPS-OVERLAP-DETECTED "
+/** Available WPS AP with active PBC found in scan results */
+#define WPS_EVENT_AP_AVAILABLE_PBC "WPS-AP-AVAILABLE-PBC "
+/** Available WPS AP with recently selected PIN registrar found in scan results
+ */
+#define WPS_EVENT_AP_AVAILABLE_PIN "WPS-AP-AVAILABLE-PIN "
+/** Available WPS AP found in scan results */
+#define WPS_EVENT_AP_AVAILABLE "WPS-AP-AVAILABLE "
+/** A new credential received */
+#define WPS_EVENT_CRED_RECEIVED "WPS-CRED-RECEIVED "
+/** M2D received */
+#define WPS_EVENT_M2D "WPS-M2D "
+/** WPS registration failed after M2/M2D */
+#define WPS_EVENT_FAIL "WPS-FAIL "
+/** WPS registration completed successfully */
+#define WPS_EVENT_SUCCESS "WPS-SUCCESS "
+/** WPS enrollment attempt timed out and was terminated */
+#define WPS_EVENT_TIMEOUT "WPS-TIMEOUT "
+
+/* hostapd control interface - fixed message prefixes */
+#define WPS_EVENT_PIN_NEEDED "WPS-PIN-NEEDED "
+#define WPS_EVENT_NEW_AP_SETTINGS "WPS-NEW-AP-SETTINGS "
+#define WPS_EVENT_REG_SUCCESS "WPS-REG-SUCCESS "
+#define WPS_EVENT_AP_SETUP_LOCKED "WPS-AP-SETUP-LOCKED "
+
 
 /* wpa_supplicant/hostapd control interface access */
 

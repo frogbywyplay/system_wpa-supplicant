@@ -126,6 +126,23 @@ struct wpa_scan_results {
 };
 
 /**
+ * struct wpa_interface_info - Network interface information
+ * @next: Pointer to the next interface or NULL if this is the last one
+ * @ifname: Interface name that can be used with init() or init2()
+ * @desc: Human readable adapter description (e.g., vendor/model) or NULL if
+ *	not available
+ * @drv_name: struct wpa_driver_ops::name (note: unlike other strings, this one
+ *	is not an allocated copy, i.e., get_interfaces() caller will not free
+ *	this)
+ */
+struct wpa_interface_info {
+	struct wpa_interface_info *next;
+	char *ifname;
+	char *desc;
+	const char *drv_name;
+};
+
+/**
  * struct wpa_driver_associate_params - Association parameters
  * Data for struct wpa_driver_ops::associate().
  */
@@ -164,6 +181,8 @@ struct wpa_driver_associate_params {
 	 * instead. The driver can determine which version is used by
 	 * looking at the first byte of the IE (0xdd for WPA, 0x30 for
 	 * WPA2/RSN).
+	 *
+	 * When using WPS, wpa_ie is used for WPS IE instead of WPA/RSN IE.
 	 */
 	const u8 *wpa_ie;
 	/**
@@ -683,7 +702,7 @@ struct wpa_driver_ops {
 	int (*flush_pmkid)(void *priv);
 
 	/**
-	 * flush_pmkid - Flush PMKSA cache
+	 * get_capa - Get driver capabilities
 	 * @priv: private driver interface data
 	 *
 	 * Returns: 0 on success, -1 on failure
@@ -711,7 +730,7 @@ struct wpa_driver_ops {
 	 * @priv: private driver interface data
 	 *
 	 * Returns: Pointer to the interface name. This can differ from the
-	 * interface name used in init() call.
+	 * interface name used in init() call. Init() is called first.
 	 *
 	 * This optional function can be used to allow the driver interface to
 	 * replace the interface name with something else, e.g., based on an
@@ -922,14 +941,90 @@ struct wpa_driver_ops {
 	 struct wpa_scan_results * (*get_scan_results2)(void *priv);
 
 	/**
-	 * * set_probe_req_ie - Set information element(s) for Probe Request
+	 * set_probe_req_ie - Set information element(s) for Probe Request
 	 * @priv: private driver interface data
 	 * @ies: Information elements to append or %NULL to remove extra IEs
 	 * @ies_len: Length of the IE buffer in octets
 	 * Returns: 0 on success, -1 on failure
 	 */
-	int (*set_probe_req_ie)(void *, const u8 *ies, size_t ies_len);
+	int (*set_probe_req_ie)(void *priv, const u8 *ies, size_t ies_len);
+
+ 	/**
+	 * set_mode - Request driver to set the operating mode
+	 * @priv: private driver interface data
+	 * @mode: Operation mode (infra/ibss) IEEE80211_MODE_*
+	 *
+	 * This handler will be called before any key configuration and call to
+	 * associate() handler in order to allow the operation mode to be
+	 * configured as early as possible. This information is also available
+	 * in associate() params and as such, some driver wrappers may not need
+	 * to implement set_mode() handler.
+	 * Returns: 0 on success, -1 on failure
+	 */
+	int (*set_mode)(void *priv, int mode);
+
+	/**
+	 * set_country - Set country
+	 * @priv: Private driver interface data
+	 * @alpha2: country to which to switch to
+	 * Returns: 0 on success, -1 on failure
+	 *
+	 * This function is for drivers which support some form
+	 * of setting a regulatory domain.
+	 */
+	int (*set_country)(void *priv, const char *alpha2);
+
+	/**
+	 * global_init - Global driver initialization
+	 * Returns: Pointer to private data (global), %NULL on failure
+	 *
+	 * This optional function is called to initialize the driver wrapper
+	 * for global data, i.e., data that applies to all interfaces. If this
+	 * function is implemented, global_deinit() will also need to be
+	 * implemented to free the private data. The driver will also likely
+	 * use init2() function instead of init() to get the pointer to global
+	 * data available to per-interface initializer.
+	 */
+	void * (*global_init)(void);
+
+	/**
+	 * global_deinit - Global driver deinitialization
+	 * @priv: private driver global data from global_init()
+	 *
+	 * Terminate any global driver related functionality and free the
+	 * global data structure.
+	 */
+	void (*global_deinit)(void *priv);
+
+	/**
+	 * init2 - Initialize driver interface (with global data)
+	 * @ctx: context to be used when calling wpa_supplicant functions,
+	 * e.g., wpa_supplicant_event()
+	 * @ifname: interface name, e.g., wlan0
+	 * @global_priv: private driver global data from global_init()
+	 * Returns: Pointer to private data, %NULL on failure
+	 *
+	 * This function can be used instead of init() if the driver wrapper
+	 * uses global data.
+	 */
+	void * (*init2)(void *ctx, const char *ifname, void *global_priv);
+
+	/**
+	 * get_interfaces - Get information about available interfaces
+	 * @global_priv: private driver global data from global_init()
+	 * Returns: Allocated buffer of interface information (caller is
+	 * responsible for freeing the data structure) on success, NULL on
+	 * failure
+	 */
+	struct wpa_interface_info * (*get_interfaces)(void *global_priv);
 };
+
+/* Function to check whether a driver is for wired connections */
+static inline int IS_WIRED(const struct wpa_driver_ops *drv)
+{
+	return os_strcmp(drv->name, "wired") == 0 ||
+		os_strcmp(drv->name, "roboswitch") == 0;
+}
 
 /**
  * enum wpa_event_type - Event type for wpa_supplicant_event() calls
@@ -1218,8 +1313,11 @@ void wpa_supplicant_sta_free_hw_features(struct wpa_hw_modes *hw_features,
 
 const u8 * wpa_scan_get_ie(const struct wpa_scan_res *res, u8 ie);
 #define WPA_IE_VENDOR_TYPE 0x0050f201
+#define WPS_IE_VENDOR_TYPE 0x0050f204
 const u8 * wpa_scan_get_vendor_ie(const struct wpa_scan_res *res,
 				  u32 vendor_type);
+struct wpabuf * wpa_scan_get_vendor_ie_multi(const struct wpa_scan_res *res,
+					     u32 vendor_type);
 int wpa_scan_get_max_rate(const struct wpa_scan_res *res);
 void wpa_scan_results_free(struct wpa_scan_results *res);
 void wpa_scan_sort_results(struct wpa_scan_results *res);

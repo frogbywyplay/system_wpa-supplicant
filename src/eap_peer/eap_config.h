@@ -83,10 +83,10 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 *
 	 * On Windows, trusted CA certificates can be loaded from the system
-	 * certificate store by setting this to cert_store://<name>, e.g.,
+	 * certificate store by setting this to cert_store://name, e.g.,
 	 * ca_cert="cert_store://CA" or ca_cert="cert_store://ROOT".
 	 * Note that when running wpa_supplicant as an application, the user
 	 * certificate store (My user account) is used, whereas computer store
@@ -115,7 +115,7 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *client_cert;
 
@@ -142,7 +142,7 @@ struct eap_peer_config {
 	 * (Computer account) is used when running wpasvc as a service.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *private_key;
 
@@ -167,7 +167,7 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *dh_file;
 
@@ -215,7 +215,7 @@ struct eap_peer_config {
 	 * EAP-TTLS/PEAP/FAST tunnel) authentication.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *ca_cert2;
 
@@ -242,7 +242,7 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *client_cert2;
 
@@ -255,7 +255,7 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *private_key2;
 
@@ -276,7 +276,7 @@ struct eap_peer_config {
 	 * wpa_supplicant is run in the background.
 	 *
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	u8 *dh_file2;
 
@@ -344,12 +344,21 @@ struct eap_peer_config {
 	 * 2 = allow authenticated provisioning,
 	 * 3 = allow both unauthenticated and authenticated provisioning
 	 *
-	 * fast_max_pac_list_len=<num> option can be used to set the maximum
+	 * fast_max_pac_list_len=num option can be used to set the maximum
 	 * number of PAC entries to store in a PAC list (default: 10).
 	 *
 	 * fast_pac_format=binary option can be used to select binary format
-	 * for storing PAC entires in order to save some space (the default
+	 * for storing PAC entries in order to save some space (the default
 	 * text format uses about 2.5 times the size of minimal binary format).
+	 *
+	 * crypto_binding option can be used to control PEAPv0 cryptobinding
+	 * behavior:
+	 * 0 = do not use cryptobinding (default)
+	 * 1 = use cryptobinding if server supports it
+	 * 2 = require cryptobinding
+	 *
+	 * EAP-WSC (WPS) uses following options: pin=Device_Password and
+	 * uuid=Device_UUID
 	 */
 	char *phase1;
 
@@ -403,12 +412,91 @@ struct eap_peer_config {
 	char *engine_id;
 
 	/**
+	 * engine2 - Enable OpenSSL engine (e.g., for smartcard) (Phase 2)
+	 *
+	 * This is used if private key operations for EAP-TLS are performed
+	 * using a smartcard.
+	 *
+	 * This field is like engine, but used for phase 2 (inside
+	 * EAP-TTLS/PEAP/FAST tunnel) authentication.
+	 */
+	int engine2;
+
+
+	/**
+	 * pin2 - PIN for USIM, GSM SIM, and smartcards (Phase 2)
+	 *
+	 * This field is used to configure PIN for SIM and smartcards for
+	 * EAP-SIM and EAP-AKA. In addition, this is used with EAP-TLS if a
+	 * smartcard is used for private key operations.
+	 *
+	 * This field is like pin2, but used for phase 2 (inside
+	 * EAP-TTLS/PEAP/FAST tunnel) authentication.
+	 *
+	 * If left out, this will be asked through control interface.
+	 */
+	char *pin2;
+
+	/**
+	 * engine2_id - Engine ID for OpenSSL engine (Phase 2)
+	 *
+	 * "opensc" to select OpenSC engine or "pkcs11" to select PKCS#11
+	 * engine.
+	 *
+	 * This is used if private key operations for EAP-TLS are performed
+	 * using a smartcard.
+	 *
+	 * This field is like engine_id, but used for phase 2 (inside
+	 * EAP-TTLS/PEAP/FAST tunnel) authentication.
+	 */
+	char *engine2_id;
+
+
+	/**
 	 * key_id - Key ID for OpenSSL engine
 	 *
 	 * This is used if private key operations for EAP-TLS are performed
 	 * using a smartcard.
 	 */
 	char *key_id;
+
+	/**
+	 * cert_id - Cert ID for OpenSSL engine
+	 *
+	 * This is used if the certificate operations for EAP-TLS are performed
+	 * using a smartcard.
+	 */
+	char *cert_id;
+
+	/**
+	 * ca_cert_id - CA Cert ID for OpenSSL engine
+	 *
+	 * This is used if the CA certificate for EAP-TLS is on a smartcard.
+	 */
+	char *ca_cert_id;
+
+	/**
+	 * key2_id - Key ID for OpenSSL engine (phase2)
+	 *
+	 * This is used if private key operations for EAP-TLS are performed
+	 * using a smartcard.
+	 */
+	char *key2_id;
+
+	/**
+	 * cert2_id - Cert ID for OpenSSL engine (phase2)
+	 *
+	 * This is used if the certificate operations for EAP-TLS are performed
+	 * using a smartcard.
+	 */
+	char *cert2_id;
+
+	/**
+	 * ca_cert2_id - CA Cert ID for OpenSSL engine (phase2)
+	 *
+	 * This is used if the CA certificate for EAP-TLS is on a smartcard.
+	 */
+	char *ca_cert2_id;
 
 	/**
 	 * otp - One-time-password
@@ -490,7 +578,7 @@ struct eap_peer_config {
 	 * to the file should be used since working directory may change when
 	 * wpa_supplicant is run in the background.
 	 * Alternatively, a named configuration blob can be used by setting
-	 * this to blob://<blob name>.
+	 * this to blob://blob_name.
 	 */
 	char *pac_file;
 

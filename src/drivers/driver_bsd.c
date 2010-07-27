@@ -21,7 +21,13 @@
 #include "ieee802_11_defs.h"
 
 #include <net/if.h>
+
+#ifdef __NetBSD__
+#include <net/if_ether.h>
+#define COMPAT_FREEBSD_NET80211
+#else
 #include <net/ethernet.h>
+#endif
 
 #include <net80211/ieee80211.h>
 #include <net80211/ieee80211_crypto.h>
@@ -171,7 +177,7 @@ wpa_driver_bsd_get_ssid(void *priv, u8 *ssid)
 }
 
 static int
-wpa_driver_bsd_set_ssid(void *priv, const char *ssid,
+wpa_driver_bsd_set_ssid(void *priv, const u8 *ssid,
 			     size_t ssid_len)
 {
 	struct wpa_driver_bsd_data *drv = priv;
@@ -181,7 +187,7 @@ wpa_driver_bsd_set_ssid(void *priv, const char *ssid,
 
 static int
 wpa_driver_bsd_set_wpa_ie(struct wpa_driver_bsd_data *drv,
-	const char *wpa_ie, size_t wpa_ie_len)
+	const u8 *wpa_ie, size_t wpa_ie_len)
 {
 	return set80211var(drv, IEEE80211_IOC_OPTIE, wpa_ie, wpa_ie_len);
 }
@@ -380,10 +386,6 @@ wpa_driver_bsd_associate(void *priv, struct wpa_driver_associate_params *params)
 	/* XXX error handling is wrong but unclear what to do... */
 	if (wpa_driver_bsd_set_wpa_ie(drv, params->wpa_ie, params->wpa_ie_len) < 0)
 		return -1;
-#ifndef NEW_FREEBSD_MLME_ASSOC
-	if (wpa_driver_bsd_set_ssid(drv, params->ssid, params->ssid_len) < 0)
-		return -1;
-#endif
 
 	privacy = !(params->pairwise_suite == CIPHER_NONE &&
 	    params->group_suite == CIPHER_NONE &&
@@ -401,11 +403,9 @@ wpa_driver_bsd_associate(void *priv, struct wpa_driver_associate_params *params)
 
 	os_memset(&mlme, 0, sizeof(mlme));
 	mlme.im_op = IEEE80211_MLME_ASSOC;
-#ifdef NEW_FREEBSD_MLME_ASSOC
 	if (params->ssid != NULL)
 		os_memcpy(mlme.im_ssid, params->ssid, params->ssid_len);
 	mlme.im_ssid_len = params->ssid_len;
-#endif
 	if (params->bssid != NULL)
 		os_memcpy(mlme.im_macaddr, params->bssid, IEEE80211_ADDR_LEN);
 	if (set80211var(drv, IEEE80211_IOC_MLME, &mlme, sizeof(mlme)) < 0)
@@ -449,7 +449,12 @@ wpa_driver_bsd_scan(void *priv, const u8 *ssid, size_t ssid_len)
 }
 
 #include <net/route.h>
+#if __FreeBSD__
 #include <net80211/ieee80211_freebsd.h>
+#endif
+#if __NetBSD__
+#include <net80211/ieee80211_netbsd.h>
+#endif
 
 static void
 wpa_driver_bsd_event_receive(int sock, void *ctx, void *sock_ctx)

@@ -60,6 +60,7 @@ struct wpa_sm {
 	void *eap_conf_ctx;
 	u8 ssid[32];
 	size_t ssid_len;
+	int wpa_ptk_rekey;
 
 	u8 own_addr[ETH_ALEN];
 	const char *ifname;
@@ -118,18 +119,6 @@ static inline wpa_states wpa_sm_get_state(struct wpa_sm *sm)
 {
 	WPA_ASSERT(sm->ctx->get_state);
 	return sm->ctx->get_state(sm->ctx->ctx);
-}
-
-static inline void wpa_sm_req_scan(struct wpa_sm *sm, int sec, int usec)
-{
-	WPA_ASSERT(sm->ctx->req_scan);
-	sm->ctx->req_scan(sm->ctx->ctx, sec, usec);
-}
-
-static inline void wpa_sm_cancel_scan(struct wpa_sm *sm)
-{
-	WPA_ASSERT(sm->ctx->cancel_scan);
-	sm->ctx->cancel_scan(sm->ctx->ctx);
 }
 
 static inline void wpa_sm_deauthenticate(struct wpa_sm *sm, int reason_code)
@@ -251,6 +240,6 @@ int wpa_supplicant_send_4_of_4(struct wpa_sm *sm, const unsigned char *dst,
 
 int wpa_derive_ptk_ft(struct wpa_sm *sm, const unsigned char *src_addr,
 		      const struct wpa_eapol_key *key,
-		      struct wpa_ptk *ptk);
+		      struct wpa_ptk *ptk, size_t ptk_len);
 
 #endif /* WPA_I_H */

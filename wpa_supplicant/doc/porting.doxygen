@@ -5,9 +5,9 @@
 hardware (board, CPU) and software (OS, drivers) targets. It is
 already used with number of operating systems and numerous wireless
 card models and drivers. The main %wpa_supplicant repository includes
-support for Linux, FreeBSD, and Windows. In addition, at least VxWorks,
-PalmOS, Windows CE, and Windows Mobile are supported in separate
-repositories. On the hardware
+support for Linux, FreeBSD, and Windows. In addition, the code has been
+ported to number of other operating systems like VxWorks, PalmOS,
+Windows CE, and Windows Mobile. On the hardware
 side, %wpa_supplicant is used on various systems: desktops, laptops,
 PDAs, and embedded devices with CPUs including x86, PowerPC,
 arm/xscale, and MIPS. Both big and little endian configurations are
@@ -19,9 +19,9 @@ supported.
 %wpa_supplicant is mostly using ANSI C functions that are available on
 most targets. However, couple of additional functions that are common
 on modern UNIX systems are used. Number of these are listed with
-prototypes in common.h (the #ifdef CONFIG_ANSI_C_EXTRA block). These
-functions may need to be implemented or at least defined as macros to
-native functions in the target OS or C library.
+prototypes in common.h (the \verbatim #ifdef CONFIG_ANSI_C_EXTRA \endverbatim
+block). These functions may need to be implemented or at least defined
+as macros to native functions in the target OS or C library.
 
 Many of the common ANSI C functions are used through a wrapper
 definitions in os.h to allow these to be replaced easily with a

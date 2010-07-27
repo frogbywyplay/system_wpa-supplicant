@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant / Configuration backend: Windows registry
- * Copyright (c) 2003-2006, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,12 +11,13 @@
  *
  * See README and COPYING for more details.
  *
- * This file implements a configuration backend for Windows registry.. All the
+ * This file implements a configuration backend for Windows registry. All the
  * configuration information is stored in the registry and the format for
  * network configuration fields is same as described in the sample
  * configuration file, wpa_supplicant.conf.
  *
- * Configuration data is in HKEY_LOCAL_MACHINE\SOFTWARE\wpa_supplicant\configs
+ * Configuration data is in
+ * \a HKEY_LOCAL_MACHINE\\SOFTWARE\\%wpa_supplicant\\configs
  * key. Each configuration profile has its own key under this. In terms of text
  * files, each profile would map to a separate text file with possibly multiple
  * networks. Under each profile, there is a networks key that lists all
@@ -24,14 +25,18 @@
  * network block in the configuration file. In addition, blobs subkey has
  * possible blobs as values.
  *
- * HKEY_LOCAL_MACHINE\SOFTWARE\wpa_supplicant\configs\test\networks\0000
- *    ssid="example"
- *    key_mgmt=WPA-PSK
+ * Example network configuration block:
+ * \verbatim
+HKEY_LOCAL_MACHINE\SOFTWARE\wpa_supplicant\configs\test\networks\0000
+   ssid="example"
+   key_mgmt=WPA-PSK
+\endverbatim
  */
 
 #include "includes.h"
 
 #include "common.h"
+#include "uuid.h"
 #include "config.h"
 
 #ifndef WPA_KEY_ROOT
@@ -161,6 +166,45 @@ static char * wpa_config_read_reg_string(HKEY hk, const TCHAR *name)
 }
 
 
+#ifdef CONFIG_WPS
+static int wpa_config_read_global_uuid(struct wpa_config *config, HKEY hk)
+{
+	char *str;
+	int ret = 0;
+
+	str = wpa_config_read_reg_string(hk, TEXT("uuid"));
+	if (str == NULL)
+		return 0;
+
+	if (uuid_str2bin(str, config->uuid))
+		ret = -1;
+
+	os_free(str);
+
+	return ret;
+}
+
+
+static int wpa_config_read_global_os_version(struct wpa_config *config,
+					     HKEY hk)
+{
+	char *str;
+	int ret = 0;
+
+	str = wpa_config_read_reg_string(hk, TEXT("os_version"));
+	if (str == NULL)
+		return 0;
+
+	if (hexstr2bin(str, config->os_version, 4))
+		ret = -1;
+
+	os_free(str);
+
+	return ret;
+}
+#endif /* CONFIG_WPS */
+
+
 static int wpa_config_read_global(struct wpa_config *config, HKEY hk)
 {
 	int errors = 0;
@@ -169,12 +213,13 @@ static int wpa_config_read_global(struct wpa_config *config, HKEY hk)
 	wpa_config_read_reg_dword(hk, TEXT("fast_reauth"),
 				  &config->fast_reauth);
 	wpa_config_read_reg_dword(hk, TEXT("dot11RSNAConfigPMKLifetime"),
-				  &config->dot11RSNAConfigPMKLifetime);
+				  (int *) &config->dot11RSNAConfigPMKLifetime);
 	wpa_config_read_reg_dword(hk,
 				  TEXT("dot11RSNAConfigPMKReauthThreshold"),
+				  (int *)
 				  &config->dot11RSNAConfigPMKReauthThreshold);
 	wpa_config_read_reg_dword(hk, TEXT("dot11RSNAConfigSATimeout"),
-				  &config->dot11RSNAConfigSATimeout);
+				  (int *) &config->dot11RSNAConfigSATimeout);
 	wpa_config_read_reg_dword(hk, TEXT("update_config"),
 				  &config->update_config);
 
@@ -190,6 +235,25 @@ static int wpa_config_read_global(struct wpa_config *config, HKEY hk)
 
 	config->ctrl_interface = wpa_config_read_reg_string(
 		hk, TEXT("ctrl_interface"));
+
+#ifdef CONFIG_WPS
+	if (wpa_config_read_global_uuid(config, hk))
+		errors++;
+	config->device_name = wpa_config_read_reg_string(
+		hk, TEXT("device_name"));
+	config->manufacturer = wpa_config_read_reg_string(
+		hk, TEXT("manufacturer"));
+	config->model_name = wpa_config_read_reg_string(
+		hk, TEXT("model_name"));
+	config->serial_number = wpa_config_read_reg_string(
+		hk, TEXT("serial_number"));
+	config->device_type = wpa_config_read_reg_string(
+		hk, TEXT("device_type"));
+	if (wpa_config_read_global_os_version(config, hk))
+		errors++;
+	wpa_config_read_reg_dword(hk, TEXT("wps_cred_processing"),
+				  &config->wps_cred_processing);
+#endif /* CONFIG_WPS */
 
 	return errors ? -1 : 0;
 }
@@ -264,7 +328,8 @@ static struct wpa_ssid * wpa_config_read_network(HKEY hk, const TCHAR *netw,
 		wpa_config_update_psk(ssid);
 	}
 
-	if ((ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK)) &&
+	if ((ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK |
+			       WPA_KEY_MGMT_PSK_SHA256)) &&
 	    !ssid->psk_set) {
 		wpa_printf(MSG_ERROR, "WPA-PSK accepted for key management, "
 			   "but no PSK configured for network '" TSTR "'.",
@@ -491,6 +556,28 @@ static int wpa_config_write_global(struct wpa_config *config, HKEY hk)
 	wpa_config_write_reg_dword(hk, TEXT("update_config"),
 				   config->update_config,
 				   0);
+#ifdef CONFIG_WPS
+	if (!is_nil_uuid(config->uuid)) {
+		char buf[40];
+		uuid_bin2str(config->uuid, buf, sizeof(buf));
+		wpa_config_write_reg_string(hk, "uuid", buf);
+	}
+	wpa_config_write_reg_string(hk, "device_name", config->device_name);
+	wpa_config_write_reg_string(hk, "manufacturer", config->manufacturer);
+	wpa_config_write_reg_string(hk, "model_name", config->model_name);
+	wpa_config_write_reg_string(hk, "model_number", config->model_number);
+	wpa_config_write_reg_string(hk, "serial_number",
+				    config->serial_number);
+	wpa_config_write_reg_string(hk, "device_type", config->device_type);
+	if (WPA_GET_BE32(config->os_version)) {
+		char vbuf[10];
+		os_snprintf(vbuf, sizeof(vbuf), "%08x",
+			    WPA_GET_BE32(config->os_version));
+		wpa_config_write_reg_string(hk, "os_version", vbuf);
+	}
+	wpa_config_write_reg_dword(hk, TEXT("wps_cred_processing"),
+				   config->wps_cred_processing, 0);
+#endif /* CONFIG_WPS */
 
 	return 0;
 }
@@ -766,7 +853,15 @@ static int wpa_config_write_network(HKEY hk, struct wpa_ssid *ssid, int id)
 	STR(pin);
 	STR(engine_id);
 	STR(key_id);
+	STR(cert_id);
+	STR(ca_cert_id);
+	STR(key2_id);
+	STR(pin2);
+	STR(engine2_id);
+	STR(cert2_id);
+	STR(ca_cert2_id);
 	INTe(engine);
+	INTe(engine2);
 	INT_DEF(eapol_flags, DEFAULT_EAPOL_FLAGS);
 #endif /* IEEE8021X_EAPOL */
 	for (i = 0; i < 4; i++)
@@ -865,6 +960,8 @@ int wpa_config_write(const char *name, struct wpa_config *config)
 
 	wpa_config_delete_subkeys(hk, TEXT("networks"));
 	for (ssid = config->ssid, id = 0; ssid; ssid = ssid->next, id++) {
+		if (ssid->key_mgmt == WPA_KEY_MGMT_WPS)
+			continue; /* do not save temporary WPS networks */
 		if (wpa_config_write_network(hk, ssid, id))
 			errors++;
 	}

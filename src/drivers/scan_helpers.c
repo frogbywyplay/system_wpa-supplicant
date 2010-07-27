@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant - Helper functions for scan result processing
- * Copyright (c) 2007, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2007-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -59,6 +59,37 @@ const u8 * wpa_scan_get_vendor_ie(const struct wpa_scan_res *res,
 }
 
 
+struct wpabuf * wpa_scan_get_vendor_ie_multi(const struct wpa_scan_res *res,
+					     u32 vendor_type)
+{
+	struct wpabuf *buf;
+	const u8 *end, *pos;
+
+	buf = wpabuf_alloc(res->ie_len);
+	if (buf == NULL)
+		return NULL;
+
+	pos = (const u8 *) (res + 1);
+	end = pos + res->ie_len;
+
+	while (pos + 1 < end) {
+		if (pos + 2 + pos[1] > end)
+			break;
+		if (pos[0] == WLAN_EID_VENDOR_SPECIFIC && pos[1] >= 4 &&
+		    vendor_type == WPA_GET_BE32(&pos[2]))
+			wpabuf_put_data(buf, pos + 2 + 4, pos[1] - 4);
+		pos += 2 + pos[1];
+	}
+
+	if (wpabuf_len(buf) == 0) {
+		wpabuf_free(buf);
+		buf = NULL;
+	}
+
+	return buf;
+}
+
+
 int wpa_scan_get_max_rate(const struct wpa_scan_res *res)
 {
 	int rate = 0;
@@ -67,14 +98,14 @@ int wpa_scan_get_max_rate(const struct wpa_scan_res *res)
 
 	ie = wpa_scan_get_ie(res, WLAN_EID_SUPP_RATES);
 	for (i = 0; ie && i < ie[1]; i++) {
-		if (ie[i + 2] > rate)
-			rate = ie[i + 2];
+		if ((ie[i + 2] & 0x7f) > rate)
+			rate = ie[i + 2] & 0x7f;
 	}
 
 	ie = wpa_scan_get_ie(res, WLAN_EID_EXT_SUPP_RATES);
 	for (i = 0; ie && i < ie[1]; i++) {
-		if (ie[i + 2] > rate)
-			rate = ie[i + 2];
+		if ((ie[i + 2] & 0x7f) > rate)
+			rate = ie[i + 2] & 0x7f;
 	}
 
 	return rate;
@@ -125,10 +156,13 @@ static int wpa_scan_result_compar(const void *a, const void *b)
 		return -1;
 
 	/* best/max rate preferred if signal level close enough XXX */
-	maxrate_a = wpa_scan_get_max_rate(wa);
-	maxrate_b = wpa_scan_get_max_rate(wb);
-	if (maxrate_a != maxrate_b && abs(wb->level - wa->level) < 5)
-		return maxrate_b - maxrate_a;
+	if ((wa->level && wb->level && abs(wb->level - wa->level) < 5) ||
+	    (wa->qual && wb->qual && abs(wb->qual - wa->qual) < 10)) {
+		maxrate_a = wpa_scan_get_max_rate(wa);
+		maxrate_b = wpa_scan_get_max_rate(wb);
+		if (maxrate_a != maxrate_b)
+			return maxrate_b - maxrate_a;
+	}
 
 	/* use freq for channel preference */
 

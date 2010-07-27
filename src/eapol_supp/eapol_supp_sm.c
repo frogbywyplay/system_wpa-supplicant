@@ -282,7 +282,12 @@ SM_STATE(SUPP_PAE, CONNECTING)
 		 * delay authentication. Use a short timeout to send the first
 		 * EAPOL-Start if Authenticator does not start authentication.
 		 */
+#ifdef CONFIG_WPS
+		/* Reduce latency on starting WPS negotiation. */
+		sm->startWhen = 1;
+#else /* CONFIG_WPS */
 		sm->startWhen = 3;
+#endif /* CONFIG_WPS */
 	}
 	eapol_enable_timer_tick(sm);
 	sm->eapolEap = FALSE;
@@ -737,8 +742,8 @@ static void eapol_sm_processKey(struct eapol_sm *sm)
 		os_memcpy(ekey + IEEE8021X_KEY_IV_LEN, keydata.encr_key,
 			  encr_key_len);
 		os_memcpy(datakey, key + 1, key_len);
-		rc4(datakey, key_len, ekey,
-		    IEEE8021X_KEY_IV_LEN + encr_key_len);
+		rc4_skip(ekey, IEEE8021X_KEY_IV_LEN + encr_key_len, 0,
+			 datakey, key_len);
 		wpa_hexdump_key(MSG_DEBUG, "EAPOL: Decrypted(RC4) key",
 				datakey, key_len);
 	} else if (key_len == 0) {
@@ -1165,6 +1170,31 @@ int eapol_sm_rx_eapol(struct eapol_sm *sm, const u8 *src, const u8 *buf,
 		sm->dot1xSuppEapLengthErrorFramesRx++;
 		return 0;
 	}
+#ifdef CONFIG_WPS
+	if (sm->conf.workaround &&
+	    plen < len - sizeof(*hdr) &&
+	    hdr->type == IEEE802_1X_TYPE_EAP_PACKET &&
+	    len - sizeof(*hdr) > sizeof(struct eap_hdr)) {
+		const struct eap_hdr *ehdr =
+			(const struct eap_hdr *) (hdr + 1);
+		u16 elen;
+
+		elen = be_to_host16(ehdr->length);
+		if (elen > plen && elen <= len - sizeof(*hdr)) {
+			/*
+			 * Buffalo WHR-G125 Ver.1.47 seems to send EAP-WPS
+			 * packets with too short EAPOL header length field
+			 * (14 octets). This is fixed in firmware Ver.1.49.
+			 * As a workaround, fix the EAPOL header based on the
+			 * correct length in the EAP packet.
+			 */
+			wpa_printf(MSG_DEBUG, "EAPOL: Workaround - fix EAPOL "
+				   "payload length based on EAP header: "
+				   "%d -> %d", (int) plen, elen);
+			plen = elen;
+		}
+	}
+#endif /* CONFIG_WPS */
 	data_len = plen + sizeof(*hdr);
 
 	switch (hdr->type) {
@@ -1349,6 +1379,7 @@ void eapol_sm_notify_config(struct eapol_sm *sm,
 	sm->conf.accept_802_1x_keys = conf->accept_802_1x_keys;
 	sm->conf.required_keys = conf->required_keys;
 	sm->conf.fast_reauth = conf->fast_reauth;
+	sm->conf.workaround = conf->workaround;
 	if (sm->eap) {
 		eap_set_fast_reauth(sm->eap, conf->fast_reauth);
 		eap_set_workaround(sm->eap, conf->workaround);
@@ -1422,8 +1453,10 @@ void eapol_sm_notify_cached(struct eapol_sm *sm)
 {
 	if (sm == NULL)
 		return;
+	wpa_printf(MSG_DEBUG, "EAPOL: PMKSA caching was used - skip EAPOL");
 	sm->SUPP_PAE_state = SUPP_PAE_AUTHENTICATED;
 	sm->suppPortStatus = Authorized;
+	sm->portValid = TRUE;
 	eap_notify_success(sm->eap);
 	eapol_sm_step(sm);
 }
@@ -1802,6 +1835,7 @@ struct eapol_sm *eapol_sm_init(struct eapol_ctx *ctx)
 	conf.pkcs11_engine_path = ctx->pkcs11_engine_path;
 	conf.pkcs11_module_path = ctx->pkcs11_module_path;
 #endif /* EAP_TLS_OPENSSL */
+	conf.wps = ctx->wps;
 
 	sm->eap = eap_peer_sm_init(sm, &eapol_cb, sm->ctx->msg_ctx, &conf);
 	if (sm->eap == NULL) {

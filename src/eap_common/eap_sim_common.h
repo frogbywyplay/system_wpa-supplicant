@@ -1,6 +1,6 @@
 /*
- * EAP peer/server: EAP-SIM/AKA shared routines
- * Copyright (c) 2004-2007, Jouni Malinen <j@w1.fi>
+ * EAP peer/server: EAP-SIM/AKA/AKA' shared routines
+ * Copyright (c) 2004-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -71,6 +71,10 @@
 #define EAP_AKA_MAX_RES_LEN 16
 #define EAP_AKA_CHECKCODE_LEN 20
 
+#define EAP_AKA_PRIME_K_AUT_LEN 32
+#define EAP_AKA_PRIME_CHECKCODE_LEN 32
+#define EAP_AKA_PRIME_K_RE_LEN 32
+
 struct wpabuf;
 
 void eap_sim_derive_mk(const u8 *identity, size_t identity_len,
@@ -89,6 +93,49 @@ int eap_sim_verify_mac(const u8 *k_aut, const struct wpabuf *req,
 		       const u8 *mac, const u8 *extra, size_t extra_len);
 void eap_sim_add_mac(const u8 *k_aut, const u8 *msg, size_t msg_len, u8 *mac,
 		     const u8 *extra, size_t extra_len);
+
+#ifdef EAP_AKA_PRIME
+void eap_aka_prime_derive_keys(const u8 *identity, size_t identity_len,
+			       const u8 *ik, const u8 *ck, u8 *k_encr,
+			       u8 *k_aut, u8 *k_re, u8 *msk, u8 *emsk);
+int eap_aka_prime_derive_keys_reauth(const u8 *k_re, u16 counter,
+				     const u8 *identity, size_t identity_len,
+				     const u8 *nonce_s, u8 *msk, u8 *emsk);
+int eap_sim_verify_mac_sha256(const u8 *k_aut, const struct wpabuf *req,
+			      const u8 *mac, const u8 *extra,
+			      size_t extra_len);
+void eap_sim_add_mac_sha256(const u8 *k_aut, const u8 *msg, size_t msg_len,
+			    u8 *mac, const u8 *extra, size_t extra_len);
+
+void eap_aka_prime_derive_ck_ik_prime(u8 *ck, u8 *ik, const u8 *sqn_ak,
+				      const u8 *network_name,
+				      size_t network_name_len);
+#else /* EAP_AKA_PRIME */
+static inline void eap_aka_prime_derive_keys(const u8 *identity,
+					     size_t identity_len,
+					     const u8 *ik, const u8 *ck,
+					     u8 *k_encr, u8 *k_aut, u8 *k_re,
+					     u8 *msk, u8 *emsk)
+{
+}
+
+static inline int eap_aka_prime_derive_keys_reauth(const u8 *k_re, u16 counter,
+						   const u8 *identity,
+						   size_t identity_len,
+						   const u8 *nonce_s, u8 *msk,
+						   u8 *emsk)
+{
+	return -1;
+}
+
+static inline int eap_sim_verify_mac_sha256(const u8 *k_aut,
+					    const struct wpabuf *req,
+					    const u8 *mac, const u8 *extra,
+					    size_t extra_len)
+{
+	return -1;
+}
+#endif /* EAP_AKA_PRIME */
 
 
 /* EAP-SIM/AKA Attributes (0..127 non-skippable) */
@@ -110,12 +157,15 @@ void eap_sim_add_mac(const u8 *k_aut, const u8 *msg, size_t msg_len, u8 *mac,
 #define EAP_SIM_AT_COUNTER_TOO_SMALL 20 /* only encrypted */
 #define EAP_SIM_AT_NONCE_S 21 /* only encrypted */
 #define EAP_SIM_AT_CLIENT_ERROR_CODE 22 /* only send */
+#define EAP_SIM_AT_KDF_INPUT 23 /* only AKA' */
+#define EAP_SIM_AT_KDF 24 /* only AKA' */
 #define EAP_SIM_AT_IV 129
 #define EAP_SIM_AT_ENCR_DATA 130
 #define EAP_SIM_AT_NEXT_PSEUDONYM 132 /* only encrypted */
 #define EAP_SIM_AT_NEXT_REAUTH_ID 133 /* only encrypted */
 #define EAP_SIM_AT_CHECKCODE 134 /* only AKA */
 #define EAP_SIM_AT_RESULT_IND 135
+#define EAP_SIM_AT_BIDDING 136
 
 /* AT_NOTIFICATION notification code values */
 #define EAP_SIM_GENERAL_FAILURE_AFTER_AUTH 0
@@ -123,6 +173,12 @@ void eap_sim_add_mac(const u8 *k_aut, const u8 *msg, size_t msg_len, u8 *mac,
 #define EAP_SIM_NOT_SUBSCRIBED 1031
 #define EAP_SIM_GENERAL_FAILURE_BEFORE_AUTH 16384
 #define EAP_SIM_SUCCESS 32768
+
+/* EAP-AKA' AT_KDF Key Derivation Function values */
+#define EAP_AKA_PRIME_KDF 1
+
+/* AT_BIDDING flags */
+#define EAP_AKA_BIDDING_FLAG_D 0x8000
 
 
 enum eap_sim_id_req {
@@ -135,13 +191,20 @@ struct eap_sim_attrs {
 	const u8 *next_pseudonym, *next_reauth_id;
 	const u8 *nonce_mt, *identity, *res, *auts;
 	const u8 *checkcode;
+	const u8 *kdf_input;
+	const u8 *bidding;
 	size_t num_chal, version_list_len, encr_data_len;
 	size_t next_pseudonym_len, next_reauth_id_len, identity_len, res_len;
+	size_t res_len_bits;
 	size_t checkcode_len;
+	size_t kdf_input_len;
 	enum eap_sim_id_req id_req;
 	int notification, counter, selected_version, client_error_code;
 	int counter_too_small;
 	int result_ind;
+#define EAP_AKA_PRIME_KDF_MAX 10
+	u16 kdf[EAP_AKA_PRIME_KDF_MAX];
+	size_t kdf_count;
 };
 
 int eap_sim_parse_attr(const u8 *start, const u8 *end,

@@ -23,6 +23,9 @@
 #include "eap_peer/eap_methods.h"
 #include "dbus_dict_helpers.h"
 #include "ieee802_11_defs.h"
+#include "wpas_glue.h"
+#include "eapol_supp/eapol_supp_sm.h"
+#include "wpa.h"
 
 #define CAPABILITIES_PROTO_WPA				(1 << 0)
 #define CAPABILITIES_PROTO_WPA2				(1 << 1)
@@ -44,6 +47,10 @@
 #define CAPABILITIES_CIPHER_WEP104			(1 << 26)
 #define CAPABILITIES_CIPHER_TKIP			(1 << 27)
 #define CAPABILITIES_CIPHER_CCMP			(1 << 28)
+
+extern int wpa_debug_level;
+extern int wpa_debug_show_keys;
+extern int wpa_debug_timestamp;
 
 /* Copied and adapted from wpa_supplicant_ctrl_iface_scan_result and wpa_supplicant_ie_txt*/
 static void wpa_dbus_parse_scan_result_capabilities(
@@ -251,7 +258,7 @@ DBusMessage * wpas_dbus_global_add_interface(DBusMessage *message,
 	 * Try to get the wpa_supplicant record for this iface, return
 	 * an error if we already control it.
 	 */
-	if (wpa_supplicant_get_iface(global, iface.ifname) != 0) {
+	if (wpa_supplicant_get_iface(global, iface.ifname) != NULL) {
 		reply = dbus_message_new_error(message,
 					       WPAS_ERROR_EXISTS_ERROR,
 					       "wpa_supplicant already "
@@ -375,6 +382,51 @@ out:
 	return reply;
 }
 
+/**
+ * wpas_dbus_global_set_debugparams- Set the debug params
+ * @message: Pointer to incoming dbus message
+ * @global: %wpa_supplicant global data structure
+ * Returns: a dbus message containing a UINT32 indicating success (1) or
+ *          failure (0), or returns a dbus error message with more information
+ *
+ * Handler function for "setDebugParams" method call. Handles requests
+ * by dbus clients for the object path of an specific network interface.
+ */
+DBusMessage * wpas_dbus_global_set_debugparams(DBusMessage *message,
+					       struct wpa_global *global)
+{
+	DBusMessage *reply = NULL;
+	int debug_level;
+	dbus_bool_t debug_timestamp;
+	dbus_bool_t debug_show_keys;
+
+	if (!dbus_message_get_args(message, NULL,
+	                           DBUS_TYPE_INT32, &debug_level,
+	                           DBUS_TYPE_BOOLEAN, &debug_timestamp,
+	                           DBUS_TYPE_BOOLEAN, &debug_show_keys,
+	                           DBUS_TYPE_INVALID)) {
+		reply = wpas_dbus_new_invalid_opts_error(message, NULL);
+		goto out;
+	}
+
+	/* check for allowed debuglevels */
+	if (debug_level != MSG_MSGDUMP &&
+	    debug_level != MSG_DEBUG &&
+	    debug_level != MSG_INFO &&
+	    debug_level != MSG_WARNING &&
+	    debug_level != MSG_ERROR) {
+		reply = wpas_dbus_new_invalid_opts_error(message, NULL);
+		goto out;
+	}
+
+	wpa_debug_level = debug_level;
+	wpa_debug_timestamp = debug_timestamp ? 1 : 0;
+	wpa_debug_show_keys = debug_show_keys ? 1 : 0;
+	reply = wpas_dbus_new_success_reply(message);
+
+out:
+	return reply;
+}
 
 /**
  * wpas_dbus_iface_scan - Request a wireless scan on an interface
@@ -519,6 +571,14 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 			goto error;
 	}
 
+	ie = wpa_scan_get_vendor_ie(res, WPS_IE_VENDOR_TYPE);
+	if (ie) {
+		if (!wpa_dbus_dict_append_byte_array(&iter_dict, "wpsie",
+						     (const char *) ie,
+						     ie[1] + 2))
+			goto error;
+	}
+
 	if (res->freq) {
 		if (!wpa_dbus_dict_append_int32(&iter_dict, "frequency",
 						res->freq))
@@ -538,7 +598,7 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	if (!wpa_dbus_dict_append_int32(&iter_dict, "level", res->level))
 		goto error;
 	if (!wpa_dbus_dict_append_int32(&iter_dict, "maxrate",
-					wpa_scan_get_max_rate(res)))
+					wpa_scan_get_max_rate(res) * 500000))
 		goto error;
 
 	if (!wpa_dbus_dict_close_write(&iter, &iter_dict))
@@ -1284,6 +1344,79 @@ out:
 
 
 /**
+ * wpas_dbus_iface_set_smartcard_modules - Set smartcard related module paths
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: wpa_supplicant structure for a network interface
+ * Returns: A dbus message containing a UINT32 indicating success (1) or
+ *          failure (0)
+ *
+ * Handler function for "setSmartcardModules" method call.
+ */
+DBusMessage * wpas_dbus_iface_set_smartcard_modules(
+	DBusMessage *message, struct wpa_supplicant *wpa_s)
+{
+	DBusMessageIter iter, iter_dict;
+	char *opensc_engine_path = NULL;
+	char *pkcs11_engine_path = NULL;
+	char *pkcs11_module_path = NULL;
+	struct wpa_dbus_dict_entry entry;
+
+	if (!dbus_message_iter_init(message, &iter))
+		goto error;
+
+	if (!wpa_dbus_dict_open_read(&iter, &iter_dict))
+		goto error;
+
+	while (wpa_dbus_dict_has_dict_entry(&iter_dict)) {
+		if (!wpa_dbus_dict_get_entry(&iter_dict, &entry))
+			goto error;
+		if (!strcmp(entry.key, "opensc_engine_path") &&
+		    (entry.type == DBUS_TYPE_STRING)) {
+			opensc_engine_path = os_strdup(entry.str_value);
+			if (opensc_engine_path == NULL)
+				goto error;
+		} else if (!strcmp(entry.key, "pkcs11_engine_path") &&
+			   (entry.type == DBUS_TYPE_STRING)) {
+			pkcs11_engine_path = os_strdup(entry.str_value);
+			if (pkcs11_engine_path == NULL)
+				goto error;
+		} else if (!strcmp(entry.key, "pkcs11_module_path") &&
+				 (entry.type == DBUS_TYPE_STRING)) {
+			pkcs11_module_path = os_strdup(entry.str_value);
+			if (pkcs11_module_path == NULL)
+				goto error;
+		} else {
+			wpa_dbus_dict_entry_clear(&entry);
+			goto error;
+		}
+		wpa_dbus_dict_entry_clear(&entry);
+	}
+
+#ifdef EAP_TLS_OPENSSL
+	os_free(wpa_s->conf->opensc_engine_path);
+	wpa_s->conf->opensc_engine_path = opensc_engine_path;
+	os_free(wpa_s->conf->pkcs11_engine_path);
+	wpa_s->conf->pkcs11_engine_path = pkcs11_engine_path;
+	os_free(wpa_s->conf->pkcs11_module_path);
+	wpa_s->conf->pkcs11_module_path = pkcs11_module_path;
+#endif /* EAP_TLS_OPENSSL */
+
+	wpa_sm_set_eapol(wpa_s->wpa, NULL);
+	eapol_sm_deinit(wpa_s->eapol);
+	wpa_s->eapol = NULL;
+	wpa_supplicant_init_eapol(wpa_s);
+	wpa_sm_set_eapol(wpa_s->wpa, wpa_s->eapol);
+
+	return wpas_dbus_new_success_reply(message);
+
+error:
+	os_free(opensc_engine_path);
+	os_free(pkcs11_engine_path);
+	os_free(pkcs11_module_path);
+	return wpas_dbus_new_invalid_opts_error(message, NULL);
+}
+
+/**
  * wpas_dbus_iface_get_state - Get interface state
  * @message: Pointer to incoming dbus message
  * @wpa_s: wpa_supplicant structure for a network interface
@@ -1310,9 +1443,38 @@ DBusMessage * wpas_dbus_iface_get_state(DBusMessage *message,
 
 
 /**
+ * wpas_dbus_iface_get_scanning - Get interface scanning state
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: wpa_supplicant structure for a network interface
+ * Returns: A dbus message containing whether the interface is scanning
+ *
+ * Handler function for "scanning" method call.
+ */
+DBusMessage * wpas_dbus_iface_get_scanning(DBusMessage *message,
+					   struct wpa_supplicant *wpa_s)
+{
+	DBusMessage *reply = NULL;
+	dbus_bool_t scanning = wpa_s->scanning ? TRUE : FALSE;
+
+	reply = dbus_message_new_method_return(message);
+	if (reply != NULL) {
+		dbus_message_append_args(reply, DBUS_TYPE_BOOLEAN, &scanning,
+					 DBUS_TYPE_INVALID);
+	} else {
+		perror("wpas_dbus_iface_get_scanning[dbus]: out of "
+		       "memory.");
+		wpa_printf(MSG_ERROR, "dbus control interface: not enough "
+			   "memory to return scanning state.");
+	}
+
+	return reply;
+}
+
+
+/**
  * wpas_dbus_iface_set_blobs - Store named binary blobs (ie, for certificates)
  * @message: Pointer to incoming dbus message
- * @global: %wpa_supplicant global data structure
+ * @wpa_s: %wpa_supplicant data structure
  * Returns: A dbus message containing a UINT32 indicating success (1) or
  *          failure (0)
  *
@@ -1395,7 +1557,7 @@ DBusMessage * wpas_dbus_iface_set_blobs(DBusMessage *message,
 /**
  * wpas_dbus_iface_remove_blob - Remove named binary blobs
  * @message: Pointer to incoming dbus message
- * @global: %wpa_supplicant global data structure
+ * @wpa_s: %wpa_supplicant data structure
  * Returns: A dbus message containing a UINT32 indicating success (1) or
  *          failure (0)
  *

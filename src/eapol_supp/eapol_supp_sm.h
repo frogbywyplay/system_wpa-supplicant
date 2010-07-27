@@ -201,6 +201,13 @@ struct eapol_ctx {
 #endif /* EAP_TLS_OPENSSL */
 
 	/**
+	 * wps - WPS context data
+	 *
+	 * This is only used by EAP-WSC and can be left %NULL if not available.
+	 */
+	struct wps_context *wps;
+
+	/**
 	 * eap_param_needed - Notify that EAP parameter is needed
 	 * @ctx: Callback context (ctx)
 	 * @field: Field name (e.g., "IDENTITY")

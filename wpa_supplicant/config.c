@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant / Configuration parser and common functions
- * Copyright (c) 2003-2007, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -60,14 +60,19 @@ struct parse_data {
 static char * wpa_config_parse_string(const char *value, size_t *len)
 {
 	if (*value == '"') {
-		char *pos;
+		const char *pos;
+		char *str;
 		value++;
 		pos = os_strrchr(value, '"');
 		if (pos == NULL || pos[1] != '\0')
 			return NULL;
-		*pos = '\0';
-		*len = os_strlen(value);
-		return os_strdup(value);
+		*len = pos - value;
+		str = os_malloc(*len + 1);
+		if (str == NULL)
+			return NULL;
+		os_memcpy(str, value, *len);
+		str[*len] = '\0';
+		return str;
 	} else {
 		u8 *str;
 		size_t tlen, hlen = os_strlen(value);
@@ -94,6 +99,14 @@ static int wpa_config_parse_str(const struct parse_data *data,
 {
 	size_t res_len, *dst_len;
 	char **dst, *tmp;
+
+	if (os_strcmp(value, "NULL") == 0) {
+		wpa_printf(MSG_DEBUG, "Unset configuration string '%s'",
+			   data->name);
+		tmp = NULL;
+		res_len = 0;
+		goto set;
+	}
 
 	tmp = wpa_config_parse_string(value, &res_len);
 	if (tmp == NULL) {
@@ -127,6 +140,7 @@ static int wpa_config_parse_str(const struct parse_data *data,
 		return -1;
 	}
 
+set:
 	dst = (char **) (((u8 *) ssid) + (long) data->param1);
 	dst_len = (size_t *) (((u8 *) ssid) + (long) data->param2);
 	os_free(*dst);
@@ -500,6 +514,16 @@ static int wpa_config_parse_key_mgmt(const struct parse_data *data,
 		else if (os_strcmp(start, "FT-EAP") == 0)
 			val |= WPA_KEY_MGMT_FT_IEEE8021X;
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_IEEE80211W
+		else if (os_strcmp(start, "WPA-PSK-SHA256") == 0)
+			val |= WPA_KEY_MGMT_PSK_SHA256;
+		else if (os_strcmp(start, "WPA-EAP-SHA256") == 0)
+			val |= WPA_KEY_MGMT_IEEE8021X_SHA256;
+#endif /* CONFIG_IEEE80211W */
+#ifdef CONFIG_WPS
+		else if (os_strcmp(start, "WPS") == 0)
+			val |= WPA_KEY_MGMT_WPS;
+#endif /* CONFIG_WPS */
 		else {
 			wpa_printf(MSG_ERROR, "Line %d: invalid key_mgmt '%s'",
 				   line, start);
@@ -595,6 +619,22 @@ static char * wpa_config_write_key_mgmt(const struct parse_data *data,
 		pos += os_snprintf(pos, end - pos, "%sFT-EAP",
 				   pos == buf ? "" : " ");
 #endif /* CONFIG_IEEE80211R */
+
+#ifdef CONFIG_IEEE80211W
+	if (ssid->key_mgmt & WPA_KEY_MGMT_PSK_SHA256)
+		pos += os_snprintf(pos, end - pos, "%sWPA-PSK-SHA256",
+				   pos == buf ? "" : " ");
+
+	if (ssid->key_mgmt & WPA_KEY_MGMT_IEEE8021X_SHA256)
+		pos += os_snprintf(pos, end - pos, "%sWPA-EAP-SHA256",
+				   pos == buf ? "" : " ");
+#endif /* CONFIG_IEEE80211W */
+
+#ifdef CONFIG_WPS
+	if (ssid->key_mgmt & WPA_KEY_MGMT_WPS)
+		pos += os_snprintf(pos, end - pos, "%sWPS",
+				   pos == buf ? "" : " ");
+#endif /* CONFIG_WPS */
 
 	return buf;
 }
@@ -991,6 +1031,14 @@ static int wpa_config_parse_password(const struct parse_data *data,
 {
 	u8 *hash;
 
+	if (os_strcmp(value, "NULL") == 0) {
+		wpa_printf(MSG_DEBUG, "Unset configuration string 'password'");
+		os_free(ssid->eap.password);
+		ssid->eap.password = NULL;
+		ssid->eap.password_len = 0;
+		return 0;
+	}
+
 	if (os_strncmp(value, "hash:", 5) != 0) {
 		char *tmp;
 		size_t res_len;
@@ -1001,8 +1049,8 @@ static int wpa_config_parse_password(const struct parse_data *data,
 				   "password.", line);
 			return -1;
 		}
-		wpa_hexdump_ascii(MSG_MSGDUMP, data->name,
-				  (u8 *) tmp, res_len);
+		wpa_hexdump_ascii_key(MSG_MSGDUMP, data->name,
+				      (u8 *) tmp, res_len);
 
 		os_free(ssid->eap.password);
 		ssid->eap.password = (u8 *) tmp;
@@ -1273,7 +1321,7 @@ static const struct parse_data ssid_fields[] = {
 	{ FUNC(eap) },
 	{ STR_LENe(identity) },
 	{ STR_LENe(anonymous_identity) },
-	{ FUNC(password) },
+	{ FUNC_KEY(password) },
 	{ STRe(ca_cert) },
 	{ STRe(ca_path) },
 	{ STRe(client_cert) },
@@ -1296,7 +1344,15 @@ static const struct parse_data ssid_fields[] = {
 	{ STR_KEYe(pin) },
 	{ STRe(engine_id) },
 	{ STRe(key_id) },
+	{ STRe(cert_id) },
+	{ STRe(ca_cert_id) },
+	{ STR_KEYe(pin2) },
+	{ STRe(engine2_id) },
+	{ STRe(key2_id) },
+	{ STRe(cert2_id) },
+	{ STRe(ca_cert2_id) },
 	{ INTe(engine) },
+	{ INTe(engine2) },
 	{ INT(eapol_flags) },
 #endif /* IEEE8021X_EAPOL */
 	{ FUNC_KEY(wep_key0) },
@@ -1319,7 +1375,8 @@ static const struct parse_data ssid_fields[] = {
 #endif /* CONFIG_IEEE80211W */
 	{ INT_RANGE(peerkey, 0, 1) },
 	{ INT_RANGE(mixed_cell, 0, 1) },
-	{ INT_RANGE(frequency, 0, 10000) }
+	{ INT_RANGE(frequency, 0, 10000) },
+	{ INT(wpa_ptk_rekey) }
 };
 
 #undef OFFSET
@@ -1453,6 +1510,13 @@ static void eap_peer_config_free(struct eap_peer_config *eap)
 	os_free(eap->pin);
 	os_free(eap->engine_id);
 	os_free(eap->key_id);
+	os_free(eap->cert_id);
+	os_free(eap->ca_cert_id);
+	os_free(eap->key2_id);
+	os_free(eap->cert2_id);
+	os_free(eap->ca_cert2_id);
+	os_free(eap->pin2);
+	os_free(eap->engine2_id);
 	os_free(eap->otp);
 	os_free(eap->pending_req_otp);
 	os_free(eap->pac_file);
@@ -1518,6 +1582,12 @@ void wpa_config_free(struct wpa_config *config)
 	os_free(config->pkcs11_module_path);
 #endif /* EAP_TLS_OPENSSL */
 	os_free(config->driver_param);
+	os_free(config->device_name);
+	os_free(config->manufacturer);
+	os_free(config->model_name);
+	os_free(config->model_number);
+	os_free(config->serial_number);
+	os_free(config->device_type);
 	os_free(config->pssid);
 	os_free(config);
 }

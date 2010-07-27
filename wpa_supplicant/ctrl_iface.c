@@ -1,6 +1,6 @@
 /*
  * WPA Supplicant / Control interface (shared code for all backends)
- * Copyright (c) 2004-2007, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2004-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -27,8 +27,11 @@
 #include "wpa_ctrl.h"
 #include "eap_peer/eap.h"
 #include "ieee802_11_defs.h"
+#include "wps_supplicant.h"
+#include "wps/wps.h"
 
-
+static int wpa_supplicant_global_iface_list(struct wpa_global *global,
+					    char *buf, int len);
 static int wpa_supplicant_global_iface_interfaces(struct wpa_global *global,
 						  char *buf, int len);
 
@@ -76,6 +79,7 @@ static int wpa_supplicant_ctrl_iface_set(struct wpa_supplicant *wpa_s,
 }
 
 
+#ifdef IEEE8021X_EAPOL
 static int wpa_supplicant_ctrl_iface_preauth(struct wpa_supplicant *wpa_s,
 					     char *addr)
 {
@@ -95,6 +99,7 @@ static int wpa_supplicant_ctrl_iface_preauth(struct wpa_supplicant *wpa_s,
 
 	return 0;
 }
+#endif /* IEEE8021X_EAPOL */
 
 
 #ifdef CONFIG_PEERKEY
@@ -135,6 +140,91 @@ static int wpa_supplicant_ctrl_iface_ft_ds(
 	return wpa_ft_start_over_ds(wpa_s->wpa, target_ap);
 }
 #endif /* CONFIG_IEEE80211R */
+
+
+#ifdef CONFIG_WPS
+static int wpa_supplicant_ctrl_iface_wps_pbc(struct wpa_supplicant *wpa_s,
+					     char *cmd)
+{
+	u8 bssid[ETH_ALEN];
+
+	if (cmd == NULL || os_strcmp(cmd, "any") == 0)
+		return wpas_wps_start_pbc(wpa_s, NULL);
+
+	if (hwaddr_aton(cmd, bssid)) {
+		wpa_printf(MSG_DEBUG, "CTRL_IFACE WPS_PBC: invalid BSSID '%s'",
+			   cmd);
+		return -1;
+	}
+
+	return wpas_wps_start_pbc(wpa_s, bssid);
+}
+
+
+static int wpa_supplicant_ctrl_iface_wps_pin(struct wpa_supplicant *wpa_s,
+					     char *cmd, char *buf,
+					     size_t buflen)
+{
+	u8 bssid[ETH_ALEN], *_bssid = bssid;
+	char *pin;
+	int ret;
+
+	pin = os_strchr(cmd, ' ');
+	if (pin)
+		*pin++ = '\0';
+
+	if (os_strcmp(cmd, "any") == 0)
+		_bssid = NULL;
+	else if (hwaddr_aton(cmd, bssid)) {
+		wpa_printf(MSG_DEBUG, "CTRL_IFACE WPS_PIN: invalid BSSID '%s'",
+			   cmd);
+		return -1;
+	}
+
+	if (pin) {
+		ret = wpas_wps_start_pin(wpa_s, _bssid, pin);
+		if (ret < 0)
+			return -1;
+		ret = os_snprintf(buf, buflen, "%s", pin);
+		if (ret < 0 || (size_t) ret >= buflen)
+			return -1;
+		return ret;
+	}
+
+	ret = wpas_wps_start_pin(wpa_s, _bssid, NULL);
+	if (ret < 0)
+		return -1;
+
+	/* Return the generated PIN */
+	ret = os_snprintf(buf, buflen, "%08d", ret);
+	if (ret < 0 || (size_t) ret >= buflen)
+		return -1;
+	return ret;
+}
+
+
+static int wpa_supplicant_ctrl_iface_wps_reg(struct wpa_supplicant *wpa_s,
+					     char *cmd)
+{
+	u8 bssid[ETH_ALEN], *_bssid = bssid;
+	char *pin;
+
+	pin = os_strchr(cmd, ' ');
+	if (pin == NULL)
+		return -1;
+	*pin++ = '\0';
+
+	if (os_strcmp(cmd, "any") == 0)
+		_bssid = NULL;
+	else if (hwaddr_aton(cmd, bssid)) {
+		wpa_printf(MSG_DEBUG, "CTRL_IFACE WPS_REG: invalid BSSID '%s'",
+			   cmd);
+		return -1;
+	}
+
+	return wpas_wps_start_reg(wpa_s, _bssid, pin);
+}
+#endif /* CONFIG_WPS */
 
 
 static int wpa_supplicant_ctrl_iface_ctrl_rsp(struct wpa_supplicant *wpa_s,
@@ -283,9 +373,8 @@ static int wpa_supplicant_ctrl_iface_status(struct wpa_supplicant *wpa_s,
 		pos += ret;
 	}
 
-	if (wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X_NO_WPA ||
-	    wpa_s->key_mgmt == WPA_KEY_MGMT_FT_IEEE8021X) {
+	if (wpa_key_mgmt_wpa_ieee8021x(wpa_s->key_mgmt) ||
+	    wpa_s->key_mgmt == WPA_KEY_MGMT_IEEE8021X_NO_WPA) {
 		res = eapol_sm_get_status(wpa_s->eapol, pos, end - pos,
 					  verbose);
 		if (res >= 0)
@@ -328,9 +417,7 @@ static int wpa_supplicant_ctrl_iface_bssid(struct wpa_supplicant *wpa_s,
 	}
 
 	os_memcpy(ssid->bssid, bssid, ETH_ALEN);
-	ssid->bssid_set =
-		os_memcmp(bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) != 0;
-		
+	ssid->bssid_set = !is_zero_ether_addr(bssid);
 
 	return 0;
 }
@@ -493,6 +580,24 @@ static char * wpa_supplicant_ie_txt(char *pos, char *end, const char *proto,
 		first = 0;
 	}
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_IEEE80211W
+	if (data.key_mgmt & WPA_KEY_MGMT_IEEE8021X_SHA256) {
+		ret = os_snprintf(pos, end - pos, "%sEAP-SHA256",
+				  first ? "" : "+");
+		if (ret < 0 || ret >= end - pos)
+			return pos;
+		pos += ret;
+		first = 0;
+	}
+	if (data.key_mgmt & WPA_KEY_MGMT_PSK_SHA256) {
+		ret = os_snprintf(pos, end - pos, "%sPSK-SHA256",
+				  first ? "" : "+");
+		if (ret < 0 || ret >= end - pos)
+			return pos;
+		pos += ret;
+		first = 0;
+	}
+#endif /* CONFIG_IEEE80211W */
 
 	pos = wpa_supplicant_cipher_txt(pos, end, data.pairwise_cipher);
 
@@ -507,6 +612,34 @@ static char * wpa_supplicant_ie_txt(char *pos, char *end, const char *proto,
 	if (ret < 0 || ret >= end - pos)
 		return pos;
 	pos += ret;
+
+	return pos;
+}
+
+static char * wpa_supplicant_wps_ie_txt(char *pos, char *end,
+					const struct wpa_scan_res *res)
+{
+#ifdef CONFIG_WPS
+	struct wpabuf *wps_ie;
+	int ret;
+	const char *txt;
+
+	wps_ie = wpa_scan_get_vendor_ie_multi(res, WPS_IE_VENDOR_TYPE);
+	if (wps_ie == NULL)
+		return pos;
+
+	if (wps_is_selected_pbc_registrar(wps_ie))
+		txt = "[WPS-PBC]";
+	else if (wps_is_selected_pin_registrar(wps_ie))
+		txt = "[WPS-PIN]";
+	else
+		txt = "[WPS]";
+
+	ret = os_snprintf(pos, end - pos, "%s", txt);
+	if (ret >= 0 && ret < end - pos)
+		pos += ret;
+	wpabuf_free(wps_ie);
+#endif /* CONFIG_WPS */
 
 	return pos;
 }
@@ -534,6 +667,7 @@ static int wpa_supplicant_ctrl_iface_scan_result(
 	ie2 = wpa_scan_get_ie(res, WLAN_EID_RSN);
 	if (ie2)
 		pos = wpa_supplicant_ie_txt(pos, end, "WPA2", ie2, 2 + ie2[1]);
+	pos = wpa_supplicant_wps_ie_txt(pos, end, res);
 	if (!ie && !ie2 && res->caps & IEEE80211_CAP_PRIVACY) {
 		ret = os_snprintf(pos, end - pos, "[WEP]");
 		if (ret < 0 || ret >= end - pos)
@@ -1233,6 +1367,10 @@ static int wpa_supplicant_ctrl_iface_bss(struct wpa_supplicant *wpa_s,
 	char *pos, *end;
 	const u8 *ie, *ie2;
 
+	if (wpa_s->scan_res == NULL &&
+	    wpa_supplicant_get_scan_results(wpa_s) < 0)
+		return 0;
+
 	results = wpa_s->scan_res;
 	if (results == NULL)
 		return 0;
@@ -1252,32 +1390,32 @@ static int wpa_supplicant_ctrl_iface_bss(struct wpa_supplicant *wpa_s,
 	bss = results->res[i];
 	pos = buf;
 	end = buf + buflen;
-	ret = snprintf(pos, end - pos,
-		       "bssid=" MACSTR "\n"
-		       "freq=%d\n"
-		       "beacon_int=%d\n"
-		       "capabilities=0x%04x\n"
-		       "qual=%d\n"
-		       "noise=%d\n"
-		       "level=%d\n"
-		       "tsf=%016llu\n"
-		       "ie=",
-		       MAC2STR(bss->bssid), bss->freq, bss->beacon_int,
-		       bss->caps, bss->qual, bss->noise, bss->level,
-		       (unsigned long long) bss->tsf);
+	ret = os_snprintf(pos, end - pos,
+			  "bssid=" MACSTR "\n"
+			  "freq=%d\n"
+			  "beacon_int=%d\n"
+			  "capabilities=0x%04x\n"
+			  "qual=%d\n"
+			  "noise=%d\n"
+			  "level=%d\n"
+			  "tsf=%016llu\n"
+			  "ie=",
+			  MAC2STR(bss->bssid), bss->freq, bss->beacon_int,
+			  bss->caps, bss->qual, bss->noise, bss->level,
+			  (unsigned long long) bss->tsf);
 	if (ret < 0 || ret >= end - pos)
 		return pos - buf;
 	pos += ret;
 
 	ie = (const u8 *) (bss + 1);
 	for (i = 0; i < bss->ie_len; i++) {
-		ret = snprintf(pos, end - pos, "%02x", *ie++);
+		ret = os_snprintf(pos, end - pos, "%02x", *ie++);
 		if (ret < 0 || ret >= end - pos)
 			return pos - buf;
 		pos += ret;
 	}
 
-	ret = snprintf(pos, end - pos, "\n");
+	ret = os_snprintf(pos, end - pos, "\n");
 	if (ret < 0 || ret >= end - pos)
 		return pos - buf;
 	pos += ret;
@@ -1293,6 +1431,7 @@ static int wpa_supplicant_ctrl_iface_bss(struct wpa_supplicant *wpa_s,
 	ie2 = wpa_scan_get_ie(bss, WLAN_EID_RSN);
 	if (ie2)
 		pos = wpa_supplicant_ie_txt(pos, end, "WPA2", ie2, 2 + ie2[1]);
+	pos = wpa_supplicant_wps_ie_txt(pos, end, bss);
 	if (!ie && !ie2 && bss->caps & IEEE80211_CAP_PRIVACY) {
 		ret = os_snprintf(pos, end - pos, "[WEP]");
 		if (ret < 0 || ret >= end - pos)
@@ -1306,7 +1445,7 @@ static int wpa_supplicant_ctrl_iface_bss(struct wpa_supplicant *wpa_s,
 		pos += ret;
 	}
 
-	ret = snprintf(pos, end - pos, "\n");
+	ret = os_snprintf(pos, end - pos, "\n");
 	if (ret < 0 || ret >= end - pos)
 		return pos - buf;
 	pos += ret;
@@ -1396,9 +1535,11 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 			wpa_s->reassociate = 1;
 			wpa_supplicant_req_scan(wpa_s, 0, 0);
 		}
+#ifdef IEEE8021X_EAPOL
 	} else if (os_strncmp(buf, "PREAUTH ", 8) == 0) {
 		if (wpa_supplicant_ctrl_iface_preauth(wpa_s, buf + 8))
 			reply_len = -1;
+#endif /* IEEE8021X_EAPOL */
 #ifdef CONFIG_PEERKEY
 	} else if (os_strncmp(buf, "STKSTART ", 9) == 0) {
 		if (wpa_supplicant_ctrl_iface_stkstart(wpa_s, buf + 9))
@@ -1409,6 +1550,21 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 		if (wpa_supplicant_ctrl_iface_ft_ds(wpa_s, buf + 6))
 			reply_len = -1;
 #endif /* CONFIG_IEEE80211R */
+#ifdef CONFIG_WPS
+	} else if (os_strcmp(buf, "WPS_PBC") == 0) {
+		if (wpa_supplicant_ctrl_iface_wps_pbc(wpa_s, NULL))
+			reply_len = -1;
+	} else if (os_strncmp(buf, "WPS_PBC ", 8) == 0) {
+		if (wpa_supplicant_ctrl_iface_wps_pbc(wpa_s, buf + 8))
+			reply_len = -1;
+	} else if (os_strncmp(buf, "WPS_PIN ", 8) == 0) {
+		reply_len = wpa_supplicant_ctrl_iface_wps_pin(wpa_s, buf + 8,
+							      reply,
+							      reply_size);
+	} else if (os_strncmp(buf, "WPS_REG ", 8) == 0) {
+		if (wpa_supplicant_ctrl_iface_wps_reg(wpa_s, buf + 8))
+			reply_len = -1;
+#endif /* CONFIG_WPS */
 	} else if (os_strncmp(buf, WPA_CTRL_RSP, os_strlen(WPA_CTRL_RSP)) == 0)
 	{
 		if (wpa_supplicant_ctrl_iface_ctrl_rsp(
@@ -1469,6 +1625,9 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 	} else if (os_strncmp(buf, "AP_SCAN ", 8) == 0) {
 		if (wpa_supplicant_ctrl_iface_ap_scan(wpa_s, buf + 8))
 			reply_len = -1;
+	} else if (os_strcmp(buf, "INTERFACE_LIST") == 0) {
+		reply_len = wpa_supplicant_global_iface_list(
+			wpa_s->global, reply, reply_size);
 	} else if (os_strcmp(buf, "INTERFACES") == 0) {
 		reply_len = wpa_supplicant_global_iface_interfaces(
 			wpa_s->global, reply, reply_size);
@@ -1584,6 +1743,63 @@ static int wpa_supplicant_global_iface_remove(struct wpa_global *global,
 }
 
 
+static void wpa_free_iface_info(struct wpa_interface_info *iface)
+{
+	struct wpa_interface_info *prev;
+
+	while (iface) {
+		prev = iface;
+		iface = iface->next;
+
+		os_free(prev->ifname);
+		os_free(prev->desc);
+		os_free(prev);
+	}
+}
+
+
+static int wpa_supplicant_global_iface_list(struct wpa_global *global,
+					    char *buf, int len)
+{
+	int i, res;
+	struct wpa_interface_info *iface = NULL, *last = NULL, *tmp;
+	char *pos, *end;
+
+	for (i = 0; wpa_supplicant_drivers[i]; i++) {
+		struct wpa_driver_ops *drv = wpa_supplicant_drivers[i];
+		if (drv->get_interfaces == NULL)
+			continue;
+		tmp = drv->get_interfaces(global->drv_priv);
+		if (tmp == NULL)
+			continue;
+
+		if (last == NULL)
+			iface = last = tmp;
+		else
+			last->next = tmp;
+		while (last->next)
+			last = last->next;
+	}
+
+	pos = buf;
+	end = buf + len;
+	for (tmp = iface; tmp; tmp = tmp->next) {
+		res = os_snprintf(pos, end - pos, "%s\t%s\t%s\n",
+				  tmp->drv_name, tmp->ifname,
+				  tmp->desc ? tmp->desc : "");
+		if (res < 0 || res >= end - pos) {
+			*pos = '\0';
+			break;
+		}
+		pos += res;
+	}
+
+	wpa_free_iface_info(iface);
+
+	return pos - buf;
+}
+
+
 static int wpa_supplicant_global_iface_interfaces(struct wpa_global *global,
 						  char *buf, int len)
 {
@@ -1636,6 +1852,9 @@ char * wpa_supplicant_global_ctrl_iface_process(struct wpa_global *global,
 	} else if (os_strncmp(buf, "INTERFACE_REMOVE ", 17) == 0) {
 		if (wpa_supplicant_global_iface_remove(global, buf + 17))
 			reply_len = -1;
+	} else if (os_strcmp(buf, "INTERFACE_LIST") == 0) {
+		reply_len = wpa_supplicant_global_iface_list(
+			global, reply, reply_size);
 	} else if (os_strcmp(buf, "INTERFACES") == 0) {
 		reply_len = wpa_supplicant_global_iface_interfaces(
 			global, reply, reply_size);

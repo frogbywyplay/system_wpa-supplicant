@@ -12,6 +12,10 @@
   <property name="windowTitle" >
    <string>wpa_gui</string>
   </property>
+  <property name="windowIcon" >
+   <iconset resource="icons.qrc" >
+    <normaloff>:/icons/wpa_gui.svg</normaloff>:/icons/wpa_gui.svg</iconset>
+  </property>
   <widget class="QWidget" name="widget" >
    <layout class="QGridLayout" >
     <item row="0" column="0" >
@@ -285,6 +289,89 @@
         </item>
        </layout>
       </widget>
+      <widget class="QWidget" name="wpsTab" >
+       <attribute name="title" >
+        <string>WPS</string>
+       </attribute>
+       <layout class="QGridLayout" name="wpsGridLayout" >
+        <item row="0" column="0" >
+         <widget class="QLabel" name="label_2" >
+          <property name="text" >
+           <string>Status:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1" colspan="3" >
+         <widget class="QLabel" name="wpsStatusText" >
+          <property name="text" >
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0" colspan="2" >
+         <widget class="QPushButton" name="wpsPbcButton" >
+          <property name="text" >
+           <string>PBC - push button</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="0" colspan="2" >
+         <widget class="QPushButton" name="wpsPinButton" >
+          <property name="text" >
+           <string>Generate PIN</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="2" >
+         <widget class="QLabel" name="label" >
+          <property name="text" >
+           <string>PIN:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="3" >
+         <widget class="QLineEdit" name="wpsPinEdit" >
+          <property name="enabled" >
+           <bool>false</bool>
+          </property>
+          <property name="readOnly" >
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="2" >
+         <widget class="QPushButton" name="wpsApPinButton" >
+          <property name="enabled" >
+           <bool>false</bool>
+          </property>
+          <property name="text" >
+           <string>Use AP PIN</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="2" >
+         <widget class="QLabel" name="label_3" >
+          <property name="text" >
+           <string>AP PIN:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="3" >
+         <widget class="QLineEdit" name="wpsApPinEdit" >
+          <property name="enabled" >
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="0" colspan="4" >
+         <widget class="QTextEdit" name="wpsInstructions" >
+          <property name="readOnly" >
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>
@@ -304,6 +391,7 @@
     </property>
     <addaction name="fileEventHistoryAction" />
     <addaction name="fileSaveConfigAction" />
+    <addaction name="actionWPS" />
     <addaction name="separator" />
     <addaction name="fileExitAction" />
    </widget>
@@ -404,9 +492,17 @@
     <string>&amp;About</string>
    </property>
   </action>
+  <action name="actionWPS" >
+   <property name="enabled" >
+    <bool>false</bool>
+   </property>
+   <property name="text" >
+    <string>&amp;Wi-Fi Protected Setup</string>
+   </property>
+  </action>
  </widget>
  <layoutdefault spacing="6" margin="11" />
- <pixmapfunction>qPixmapFromMimeSource</pixmapfunction>
+ <pixmapfunction></pixmapfunction>
  <includes>
   <include location="global" >qtimer.h</include>
   <include location="global" >qsocketnotifier.h</include>
@@ -414,6 +510,8 @@
   <include location="local" >eventhistory.h</include>
   <include location="local" >scanresults.h</include>
  </includes>
- <resources/>
+ <resources>
+  <include location="icons.qrc" />
+ </resources>
  <connections/>
 </ui>

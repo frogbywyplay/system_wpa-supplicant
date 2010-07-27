@@ -3,13 +3,13 @@
 .\" <http://shell.ipoline.com/~elmert/comp/docbook2X/> 
 .\" Please send any bug reports, improvements, comments, patches, 
 .\" etc. to Steve Cheng <steve@ggi-project.org>.
-.TH "WPA_GUI" "8" "22 February 2008" "" ""
+.TH "WPA_GUI" "8" "12 January 2010" "" ""
 
 .SH NAME
 wpa_gui \- WPA Graphical User Interface
 .SH SYNOPSIS
 
-\fBwpa_gui\fR [ \fB-p \fIpath to ctrl sockets\fB\fR ] [ \fB-i \fIifname\fB\fR ]
+\fBwpa_gui\fR [ \fB-p \fIpath to ctrl sockets\fB\fR ] [ \fB-i \fIifname\fB\fR ] [ \fB-t\fR ]
 
 .SH "OVERVIEW"
 .PP
@@ -31,6 +31,11 @@ be found.
 Specify the interface that is being
 configured. By default, choose the first interface found with
 a control socket in the socket path.
+.TP
+\fB-t\fR
+Start program in the system tray only (if the window
+manager supports it). By default the main status window is
+shown.
 .SH "SEE ALSO"
 .PP
 \fBwpa_cli\fR(8)

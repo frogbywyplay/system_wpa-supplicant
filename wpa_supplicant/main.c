@@ -21,25 +21,12 @@
 #include "wpa_supplicant_i.h"
 
 
-extern const char *wpa_supplicant_version;
-extern const char *wpa_supplicant_license;
-#ifndef CONFIG_NO_STDOUT_DEBUG
-extern const char *wpa_supplicant_full_license1;
-extern const char *wpa_supplicant_full_license2;
-extern const char *wpa_supplicant_full_license3;
-extern const char *wpa_supplicant_full_license4;
-extern const char *wpa_supplicant_full_license5;
-#endif /* CONFIG_NO_STDOUT_DEBUG */
-
-extern struct wpa_driver_ops *wpa_supplicant_drivers[];
-
-
 static void usage(void)
 {
 	int i;
 	printf("%s\n\n%s\n"
 	       "usage:\n"
-	       "  wpa_supplicant [-BddhKLqqtuvwW] [-P<pid file>] "
+	       "  wpa_supplicant [-BddhKLqqtuvW] [-P<pid file>] "
 	       "[-g<global ctrl>] \\\n"
 	       "        -i<ifname> -c<config file> [-C<ctrl>] [-D<driver>] "
 	       "[-p<driver_param>] \\\n"

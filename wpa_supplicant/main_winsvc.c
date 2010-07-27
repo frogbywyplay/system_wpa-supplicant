@@ -12,7 +12,7 @@
  * See README and COPYING for more details.
  *
  * The root of wpa_supplicant configuration in registry is
- * HKEY_LOCAL_MACHINE\SOFTWARE\wpa_supplicant. This level includes global
+ * HKEY_LOCAL_MACHINE\\SOFTWARE\\%wpa_supplicant. This level includes global
  * parameters and a 'interfaces' subkey with all the interface configuration
  * (adapter to confname mapping). Each such mapping is a subkey that has
  * 'adapter' and 'config' values.
@@ -70,9 +70,10 @@ static int read_interface(struct wpa_global *global, HKEY _hk,
 	HKEY hk;
 #define TBUFLEN 255
 	TCHAR adapter[TBUFLEN], config[TBUFLEN], ctrl_interface[TBUFLEN];
-	DWORD buflen;
+	DWORD buflen, val;
 	LONG ret;
 	struct wpa_interface iface;
+	int skip_on_error = 0;
 
 	ret = RegOpenKeyEx(_hk, name, 0, KEY_QUERY_VALUE, &hk);
 	if (ret != ERROR_SUCCESS) {
@@ -116,10 +117,21 @@ static int read_interface(struct wpa_global *global, HKEY _hk,
 		iface.confname = (char *) config;
 	}
 
+	buflen = sizeof(val);
+	ret = RegQueryValueEx(hk, TEXT("skip_on_error"), NULL, NULL,
+			      (LPBYTE) &val, &buflen);
+	if (ret == ERROR_SUCCESS && buflen == sizeof(val))
+		skip_on_error = val;
+
 	RegCloseKey(hk);
 
-	if (wpa_supplicant_add_iface(global, &iface) == NULL)
-		return -1;
+	if (wpa_supplicant_add_iface(global, &iface) == NULL) {
+		if (skip_on_error)
+			wpa_printf(MSG_DEBUG, "Skipped interface '%s' due to "
+				   "initialization failure", iface.ifname);
+		else
+			return -1;
+	}
 
 	return 0;
 }
@@ -159,6 +171,13 @@ static int wpa_supplicant_thread(void)
 			      (LPBYTE) &val, &buflen);
 	if (ret == ERROR_SUCCESS && buflen == sizeof(val)) {
 		params.wpa_debug_show_keys = val;
+	}
+
+	buflen = sizeof(val);
+	ret = RegQueryValueEx(hk, TEXT("debug_timestamp"), NULL, NULL,
+			      (LPBYTE) &val, &buflen);
+	if (ret == ERROR_SUCCESS && buflen == sizeof(val)) {
+		params.wpa_debug_timestamp = val;
 	}
 
 	buflen = sizeof(val);

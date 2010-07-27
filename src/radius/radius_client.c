@@ -35,7 +35,8 @@
 struct radius_rx_handler {
 	RadiusRxResult (*handler)(struct radius_msg *msg,
 				  struct radius_msg *req,
-				  u8 *shared_secret, size_t shared_secret_len,
+				  const u8 *shared_secret,
+				  size_t shared_secret_len,
 				  void *data);
 	void *data;
 };
@@ -106,7 +107,7 @@ int radius_client_register(struct radius_client_data *radius,
 			   RadiusType msg_type,
 			   RadiusRxResult (*handler)(struct radius_msg *msg,
 						     struct radius_msg *req,
-						     u8 *shared_secret,
+						     const u8 *shared_secret,
 						     size_t shared_secret_len,
 						     void *data),
 			   void *data)
@@ -712,9 +713,9 @@ void radius_client_flush(struct radius_client_data *radius, int only_auth)
 }
 
 
-void radius_client_update_acct_msgs(struct radius_client_data *radius,
-				    u8 *shared_secret,
-				    size_t shared_secret_len)
+static void radius_client_update_acct_msgs(struct radius_client_data *radius,
+					   u8 *shared_secret,
+					   size_t shared_secret_len)
 {
 	struct radius_msg_list *entry;
 
@@ -738,15 +739,16 @@ radius_change_server(struct radius_client_data *radius,
 		     struct hostapd_radius_server *oserv,
 		     int sock, int sock6, int auth)
 {
-	struct sockaddr_in serv;
+	struct sockaddr_in serv, claddr;
 #ifdef CONFIG_IPV6
-	struct sockaddr_in6 serv6;
+	struct sockaddr_in6 serv6, claddr6;
 #endif /* CONFIG_IPV6 */
-	struct sockaddr *addr;
-	socklen_t addrlen;
+	struct sockaddr *addr, *cl_addr;
+	socklen_t addrlen, claddrlen;
 	char abuf[50];
 	int sel_sock;
 	struct radius_msg_list *entry;
+	struct hostapd_radius_servers *conf = radius->conf;
 
 	hostapd_logger(radius->ctx, NULL, HOSTAPD_MODULE_RADIUS,
 		       HOSTAPD_LEVEL_INFO,
@@ -816,10 +818,64 @@ radius_change_server(struct radius_client_data *radius,
 		return -1;
 	}
 
+	if (conf->force_client_addr) {
+		switch (conf->client_addr.af) {
+		case AF_INET:
+			os_memset(&claddr, 0, sizeof(claddr));
+			claddr.sin_family = AF_INET;
+			claddr.sin_addr.s_addr = conf->client_addr.u.v4.s_addr;
+			claddr.sin_port = htons(0);
+			cl_addr = (struct sockaddr *) &claddr;
+			claddrlen = sizeof(claddr);
+			break;
+#ifdef CONFIG_IPV6
+		case AF_INET6:
+			os_memset(&claddr6, 0, sizeof(claddr6));
+			claddr6.sin6_family = AF_INET6;
+			os_memcpy(&claddr6.sin6_addr, &conf->client_addr.u.v6,
+				  sizeof(struct in6_addr));
+			claddr6.sin6_port = htons(0);
+			cl_addr = (struct sockaddr *) &claddr6;
+			claddrlen = sizeof(claddr6);
+			break;
+#endif /* CONFIG_IPV6 */
+		default:
+			return -1;
+		}
+
+		if (bind(sel_sock, cl_addr, claddrlen) < 0) {
+			perror("bind[radius]");
+			return -1;
+		}
+	}
+
 	if (connect(sel_sock, addr, addrlen) < 0) {
 		perror("connect[radius]");
 		return -1;
 	}
+
+#ifndef CONFIG_NATIVE_WINDOWS
+	switch (nserv->addr.af) {
+	case AF_INET:
+		claddrlen = sizeof(claddr);
+		getsockname(sel_sock, (struct sockaddr *) &claddr, &claddrlen);
+		wpa_printf(MSG_DEBUG, "RADIUS local address: %s:%u",
+			   inet_ntoa(claddr.sin_addr), ntohs(claddr.sin_port));
+		break;
+#ifdef CONFIG_IPV6
+	case AF_INET6: {
+		claddrlen = sizeof(claddr6);
+		getsockname(sel_sock, (struct sockaddr *) &claddr6,
+			    &claddrlen);
+		wpa_printf(MSG_DEBUG, "RADIUS local address: %s:%u",
+			   inet_ntop(AF_INET6, &claddr6.sin6_addr,
+				     abuf, sizeof(abuf)),
+			   ntohs(claddr6.sin6_port));
+		break;
+	}
+#endif /* CONFIG_IPV6 */
+	}
+#endif /* CONFIG_NATIVE_WINDOWS */
 
 	if (auth)
 		radius->auth_sock = sel_sock;
@@ -861,6 +917,22 @@ static void radius_retry_primary_timer(void *eloop_ctx, void *timeout_ctx)
 }
 
 
+static int radius_client_disable_pmtu_discovery(int s)
+{
+	int r = -1;
+#if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
+	/* Turn off Path MTU discovery on IPv4/UDP sockets. */
+	int action = IP_PMTUDISC_DONT;
+	r = setsockopt(s, IPPROTO_IP, IP_MTU_DISCOVER, &action,
+		       sizeof(action));
+	if (r == -1)
+		wpa_printf(MSG_ERROR, "Failed to set IP_MTU_DISCOVER: "
+			   "%s", strerror(errno));
+#endif
+	return r;
+}
+
+
 static int radius_client_init_auth(struct radius_client_data *radius)
 {
 	struct hostapd_radius_servers *conf = radius->conf;
@@ -869,8 +941,10 @@ static int radius_client_init_auth(struct radius_client_data *radius)
 	radius->auth_serv_sock = socket(PF_INET, SOCK_DGRAM, 0);
 	if (radius->auth_serv_sock < 0)
 		perror("socket[PF_INET,SOCK_DGRAM]");
-	else
+	else {
+		radius_client_disable_pmtu_discovery(radius->auth_serv_sock);
 		ok++;
+	}
 
 #ifdef CONFIG_IPV6
 	radius->auth_serv_sock6 = socket(PF_INET6, SOCK_DGRAM, 0);
@@ -919,8 +993,10 @@ static int radius_client_init_acct(struct radius_client_data *radius)
 	radius->acct_serv_sock = socket(PF_INET, SOCK_DGRAM, 0);
 	if (radius->acct_serv_sock < 0)
 		perror("socket[PF_INET,SOCK_DGRAM]");
-	else
+	else {
+		radius_client_disable_pmtu_discovery(radius->acct_serv_sock);
 		ok++;
+	}
 
 #ifdef CONFIG_IPV6
 	radius->acct_serv_sock6 = socket(PF_INET6, SOCK_DGRAM, 0);
@@ -1004,6 +1080,12 @@ void radius_client_deinit(struct radius_client_data *radius)
 		eloop_unregister_read_sock(radius->auth_serv_sock);
 	if (radius->acct_serv_sock >= 0)
 		eloop_unregister_read_sock(radius->acct_serv_sock);
+#ifdef CONFIG_IPV6
+	if (radius->auth_serv_sock6 >= 0)
+		eloop_unregister_read_sock(radius->auth_serv_sock6);
+	if (radius->acct_serv_sock6 >= 0)
+		eloop_unregister_read_sock(radius->acct_serv_sock6);
+#endif /* CONFIG_IPV6 */
 
 	eloop_cancel_timeout(radius_retry_primary_timer, radius, NULL);
 

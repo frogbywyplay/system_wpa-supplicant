@@ -1,5 +1,5 @@
 /*
- * EAP peer method: EAP-TTLS (draft-ietf-pppext-eap-ttls-03.txt)
+ * EAP peer method: EAP-TTLS (RFC 5281)
  * Copyright (c) 2004-2008, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -27,7 +27,7 @@
 
 
 /* Maximum supported TTLS version
- * 0 = draft-ietf-pppext-eap-ttls-03.txt / draft-funk-eap-ttls-v0-00.txt
+ * 0 = RFC 5281
  * 1 = draft-funk-eap-ttls-v1-00.txt
  */
 #ifndef EAP_TTLS_VERSION
@@ -558,10 +558,8 @@ static int eap_ttls_phase2_request_eap_method(struct eap_sm *sm,
 			EAP_VENDOR_IETF, method);
 		if (data->phase2_method) {
 			sm->init_phase2 = 1;
-			sm->mschapv2_full_key = 1;
 			data->phase2_priv = data->phase2_method->init(sm);
 			sm->init_phase2 = 0;
-			sm->mschapv2_full_key = 0;
 		}
 	}
 	if (data->phase2_priv == NULL || data->phase2_method == NULL) {
@@ -669,7 +667,7 @@ static int eap_ttls_phase2_request_mschapv2(struct eap_sm *sm,
 
 	/* MS-CHAP-Challenge */
 	challenge = eap_ttls_implicit_challenge(
-		sm, data, EAP_TTLS_MSCHAPV2_CHALLENGE_LEN * 2 + 1);
+		sm, data, EAP_TTLS_MSCHAPV2_CHALLENGE_LEN + 1);
 	if (challenge == NULL) {
 		wpabuf_free(msg);
 		wpa_printf(MSG_ERROR, "EAP-TTLS/MSCHAPV2: Failed to derive "
@@ -753,7 +751,8 @@ static int eap_ttls_phase2_request_mschap(struct eap_sm *sm,
 			       identity, identity_len);
 
 	/* MS-CHAP-Challenge */
-	challenge = eap_ttls_implicit_challenge(sm, data, EAP_TLS_KEY_LEN);
+	challenge = eap_ttls_implicit_challenge(
+		sm, data, EAP_TTLS_MSCHAP_CHALLENGE_LEN + 1);
 	if (challenge == NULL) {
 		wpabuf_free(msg);
 		wpa_printf(MSG_ERROR, "EAP-TTLS/MSCHAP: Failed to derive "
@@ -843,7 +842,7 @@ static int eap_ttls_phase2_request_pap(struct eap_sm *sm,
 	/* User-Password; in RADIUS, this is encrypted, but EAP-TTLS encrypts
 	 * the data, so no separate encryption is used in the AVP itself.
 	 * However, the password is padded to obfuscate its length. */
-	pad = (16 - (password_len & 15)) & 15;
+	pad = password_len == 0 ? 16 : (16 - (password_len & 15)) & 15;
 	pos = eap_ttls_avp_hdr(pos, RADIUS_ATTR_USER_PASSWORD, 0, 1,
 			       password_len + pad);
 	os_memcpy(pos, password, password_len);
@@ -901,7 +900,8 @@ static int eap_ttls_phase2_request_chap(struct eap_sm *sm,
 			       identity, identity_len);
 
 	/* CHAP-Challenge */
-	challenge = eap_ttls_implicit_challenge(sm, data, EAP_TLS_KEY_LEN);
+	challenge = eap_ttls_implicit_challenge(
+		sm, data, EAP_TTLS_CHAP_CHALLENGE_LEN + 1);
 	if (challenge == NULL) {
 		wpabuf_free(msg);
 		wpa_printf(MSG_ERROR, "EAP-TTLS/CHAP: Failed to derive "
@@ -991,7 +991,7 @@ static int eap_ttls_phase2_request(struct eap_sm *sm,
 		}
 	}
 
-	switch (data->phase2_type) {
+	switch (phase2_type) {
 	case EAP_TTLS_PHASE2_EAP:
 		res = eap_ttls_phase2_request_eap(sm, data, ret, hdr, resp);
 		break;
@@ -1334,6 +1334,15 @@ static int eap_ttls_process_phase2_mschapv2(struct eap_sm *sm,
 	}
 
 	if (parse->mschapv2 == NULL) {
+#ifdef EAP_TNC
+		if (data->phase2_success && parse->eapdata) {
+			/*
+			 * Allow EAP-TNC to be started after successfully
+			 * completed MSCHAPV2.
+			 */
+			return 1;
+		}
+#endif /* EAP_TNC */
 		wpa_printf(MSG_WARNING, "EAP-TTLS: no MS-CHAP2-Success AVP "
 			   "received for Phase2 MSCHAPV2");
 		return -1;
@@ -1435,9 +1444,7 @@ static int eap_ttls_process_decrypted(struct eap_sm *sm,
 	case EAP_TTLS_PHASE2_MSCHAPV2:
 		res = eap_ttls_process_phase2_mschapv2(sm, data, ret, parse);
 #ifdef EAP_TNC
-		if (res == 1 && parse->eapdata &&
-		    ret->methodState == METHOD_DONE &&
-		    ret->decision == DECISION_UNCOND_SUCC) {
+		if (res == 1 && parse->eapdata && data->phase2_success) {
 			/*
 			 * TNC may be required as the next
 			 * authentication method within the tunnel.
@@ -1801,10 +1808,10 @@ static struct wpabuf * eap_ttls_process(struct eap_sm *sm, void *priv,
 		if (eap_ttls_process_start(sm, data, flags, ret) < 0)
 			return NULL;
 
-		/* draft-ietf-pppext-eap-ttls-03.txt, Ch. 8.1:
-		 * EAP-TTLS Start packet may, in a future specification, be
-		 * allowed to contain data. Client based on this draft version
-		 * must ignore such data but must not reject the Start packet.
+		/* RFC 5281, Ch. 9.2:
+		 * "This packet MAY contain additional information in the form
+		 * of AVPs, which may provide useful hints to the client"
+		 * For now, ignore any potential extra data.
 		 */
 		left = 0;
 	} else if (!data->ssl_initialized) {

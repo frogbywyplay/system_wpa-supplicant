@@ -45,6 +45,18 @@ static int eap_tls_check_blob(struct eap_sm *sm, const char **name,
 }
 
 
+static void eap_tls_params_flags(struct tls_connection_params *params,
+				 const char *txt)
+{
+	if (txt == NULL)
+		return;
+	if (os_strstr(txt, "tls_allow_md5=1"))
+		params->flags |= TLS_CONN_ALLOW_SIGN_RSA_MD5;
+	if (os_strstr(txt, "tls_disable_time_checks=1"))
+		params->flags |= TLS_CONN_DISABLE_TIME_CHECKS;
+}
+
+
 static void eap_tls_params_from_conf1(struct tls_connection_params *params,
 				      struct eap_peer_config *config)
 {
@@ -56,9 +68,13 @@ static void eap_tls_params_from_conf1(struct tls_connection_params *params,
 	params->dh_file = (char *) config->dh_file;
 	params->subject_match = (char *) config->subject_match;
 	params->altsubject_match = (char *) config->altsubject_match;
+	params->engine = config->engine;
 	params->engine_id = config->engine_id;
 	params->pin = config->pin;
 	params->key_id = config->key_id;
+	params->cert_id = config->cert_id;
+	params->ca_cert_id = config->ca_cert_id;
+	eap_tls_params_flags(params, config->phase1);
 }
 
 
@@ -73,6 +89,13 @@ static void eap_tls_params_from_conf2(struct tls_connection_params *params,
 	params->dh_file = (char *) config->dh_file2;
 	params->subject_match = (char *) config->subject_match2;
 	params->altsubject_match = (char *) config->altsubject_match2;
+	params->engine = config->engine2;
+	params->engine_id = config->engine2_id;
+	params->pin = config->pin2;
+	params->key_id = config->key2_id;
+	params->cert_id = config->cert2_id;
+	params->ca_cert_id = config->ca_cert2_id;
+	eap_tls_params_flags(params, config->phase2);
 }
 
 
@@ -82,11 +105,13 @@ static int eap_tls_params_from_conf(struct eap_sm *sm,
 				    struct eap_peer_config *config, int phase2)
 {
 	os_memset(params, 0, sizeof(*params));
-	params->engine = config->engine;
-	if (phase2)
+	if (phase2) {
+		wpa_printf(MSG_DEBUG, "TLS: using phase2 config options");
 		eap_tls_params_from_conf2(params, config);
-	else
+	} else {
+		wpa_printf(MSG_DEBUG, "TLS: using phase1 config options");
 		eap_tls_params_from_conf1(params, config);
+	}
 	params->tls_ia = data->tls_ia;
 
 	/*
@@ -490,6 +515,17 @@ static int eap_tls_process_output(struct eap_ssl_data *data, EapType eap_type,
 	length_included = data->tls_out_pos == 0 &&
 		(data->tls_out_len > data->tls_out_limit ||
 		 data->include_tls_length);
+	if (!length_included &&
+	    eap_type == EAP_TYPE_PEAP && peap_version == 0 &&
+	    !tls_connection_established(data->eap->ssl_ctx, data->conn)) {
+		/*
+		 * Windows Server 2008 NPS really wants to have the TLS Message
+		 * length included in phase 0 even for unfragmented frames or
+		 * it will get very confused with Compound MAC calculation and
+		 * Outer TLVs.
+		 */
+		length_included = 1;
+	}
 
 	*out_data = eap_msg_alloc(EAP_VENDOR_IETF, eap_type,
 				  1 + length_included * 4 + len,
@@ -727,8 +763,21 @@ const u8 * eap_peer_tls_process_init(struct eap_sm *sm,
 		ret->ignore = TRUE;
 		return NULL;
 	}
-	*flags = *pos++;
-	left--;
+	if (left == 0) {
+		wpa_printf(MSG_DEBUG, "SSL: Invalid TLS message: no Flags "
+			   "octet included");
+		if (!sm->workaround) {
+			ret->ignore = TRUE;
+			return NULL;
+		}
+
+		wpa_printf(MSG_DEBUG, "SSL: Workaround - assume no Flags "
+			   "indicates ACK frame");
+		*flags = 0;
+	} else {
+		*flags = *pos++;
+		left--;
+	}
 	wpa_printf(MSG_DEBUG, "SSL: Received packet(len=%lu) - "
 		   "Flags 0x%02x", (unsigned long) wpabuf_len(reqData),
 		   *flags);
@@ -820,6 +869,14 @@ int eap_peer_tls_decrypt(struct eap_sm *sm, struct eap_ssl_data *data,
 	buf_len = wpabuf_len(in_data);
 	if (data->tls_in_total > buf_len)
 		buf_len = data->tls_in_total;
+	/*
+	 * Even though we try to disable TLS compression, it is possible that
+	 * this cannot be done with all TLS libraries. Add extra buffer space
+	 * to handle the possibility of the decrypted data being longer than
+	 * input data.
+	 */
+	buf_len += 500;
+	buf_len *= 3;
 	*in_decrypted = wpabuf_alloc(buf_len ? buf_len : 1);
 	if (*in_decrypted == NULL) {
 		eap_peer_tls_reset_input(data);
@@ -861,7 +918,7 @@ int eap_peer_tls_encrypt(struct eap_sm *sm, struct eap_ssl_data *data,
 
 	if (in_data) {
 		eap_peer_tls_reset_output(data);
-		len = wpabuf_len(in_data) + 100;
+		len = wpabuf_len(in_data) + 300;
 		data->tls_out = os_malloc(len);
 		if (data->tls_out == NULL)
 			return -1;

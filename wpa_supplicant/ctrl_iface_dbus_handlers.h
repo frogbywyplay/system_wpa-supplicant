@@ -18,6 +18,7 @@
 #ifdef CONFIG_CTRL_IFACE_DBUS
 
 DBusMessage * wpas_dbus_new_invalid_iface_error(DBusMessage *message);
+DBusMessage * wpas_dbus_new_invalid_network_error(DBusMessage *message);
 
 DBusMessage * wpas_dbus_global_add_interface(DBusMessage *message,
 					     struct wpa_global *global);
@@ -85,6 +86,19 @@ DBusMessage * wpas_dbus_iface_set_blobs(DBusMessage *message,
 
 DBusMessage * wpas_dbus_iface_remove_blobs(DBusMessage *message,
 					   struct wpa_supplicant *wpa_s);
+
+DBusMessage * wpas_dbus_iface_wps_pbc(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s);
+
+DBusMessage * wpas_dbus_iface_wps_pin(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s);
+
+DBusMessage * wpas_dbus_iface_wps_reg(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s);
+
+DBusMessage * wpas_dbus_new_success_reply(DBusMessage *message);
+DBusMessage * wpas_dbus_new_invalid_opts_error(DBusMessage *message,
+					       const char *arg);
 
 #endif /* CONFIG_CTRL_IFACE_DBUS */
 

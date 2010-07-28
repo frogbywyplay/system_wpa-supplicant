@@ -885,7 +885,7 @@ endif
 
 ifdef CONFIG_CTRL_IFACE_DBUS
 CFLAGS += -DCONFIG_CTRL_IFACE_DBUS -DDBUS_API_SUBJECT_TO_CHANGE
-OBJS += ctrl_iface_dbus.o ctrl_iface_dbus_handlers.o dbus_dict_helpers.o
+OBJS += ctrl_iface_dbus.o ctrl_iface_dbus_handlers.o ctrl_iface_dbus_handlers_wps.o dbus_dict_helpers.o
 ifndef DBUS_LIBS
 DBUS_LIBS := $(shell pkg-config --libs dbus-1)
 endif

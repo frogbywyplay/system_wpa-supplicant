@@ -41,6 +41,9 @@
 #define CAPABILITIES_KEYMGMT_WPA_NONE		(1 << 18)
 #define CAPABILITIES_KEYMGMT_FT_EAP			(1 << 19)
 #define CAPABILITIES_KEYMGMT_FT_PSK			(1 << 20)
+#define CAPABILITIES_KEYMGMT_WPS			(1 << 21)
+#define CAPABILITIES_KEYMGMT_WPS_PBC    	(1 << 22)
+#define CAPABILITIES_KEYMGMT_WPS_PIN    	(1 << 23)
 
 #define CAPABILITIES_CIPHER_NONE			(1 << 24)
 #define CAPABILITIES_CIPHER_WEP40			(1 << 25)
@@ -52,13 +55,16 @@ extern int wpa_debug_level;
 extern int wpa_debug_show_keys;
 extern int wpa_debug_timestamp;
 
-/* Copied and adapted from wpa_supplicant_ctrl_iface_scan_result and wpa_supplicant_ie_txt*/
+/* Copied and adapted from wpa_supplicant_ctrl_iface_scan_result, wpa_supplicant_ie_txt and wpa_supplicant_wps_ie_txt. */
 static void wpa_dbus_parse_scan_result_capabilities(
 	const struct wpa_scan_res *res, uint32_t *capabilities)
 {
 	int has_ie = 0;
 	const u8 *ie, *ie2;
 	struct wpa_ie_data data;
+#ifdef CONFIG_WPS
+	struct wpabuf *wps_ie;
+#endif /* CONFIG_WPS */
 
 	*capabilities = 0;
 
@@ -87,6 +93,22 @@ static void wpa_dbus_parse_scan_result_capabilities(
 	if (res->caps & IEEE80211_CAP_ESS) {
 		*capabilities |= CAPABILITIES_MODE_INFRA;
 	}
+
+#ifdef CONFIG_WPS
+	wps_ie = wpa_scan_get_vendor_ie_multi(res, WPS_IE_VENDOR_TYPE);
+	if (wps_ie != NULL) {
+		if (wps_is_selected_pbc_registrar(wps_ie)) {
+			*capabilities |= CAPABILITIES_KEYMGMT_WPS_PBC;
+		}
+		else if (wps_is_selected_pin_registrar(wps_ie)) {
+			*capabilities |= CAPABILITIES_KEYMGMT_WPS_PIN;
+		}
+		else {
+			*capabilities |= CAPABILITIES_KEYMGMT_WPS;
+		}
+		wpabuf_free(wps_ie);
+	}
+#endif /* CONFIG_WPS */
 
 	if (!has_ie) {
 		return;
@@ -138,7 +160,7 @@ static void wpa_dbus_parse_scan_result_capabilities(
  *
  * Convenience function to create and return an invalid options error
  */
-static DBusMessage * wpas_dbus_new_invalid_opts_error(DBusMessage *message,
+DBusMessage * wpas_dbus_new_invalid_opts_error(DBusMessage *message,
 						      const char *arg)
 {
 	DBusMessage *reply;
@@ -162,7 +184,7 @@ static DBusMessage * wpas_dbus_new_invalid_opts_error(DBusMessage *message,
  *
  * Convenience function to create and return a success reply message
  */
-static DBusMessage * wpas_dbus_new_success_reply(DBusMessage *message)
+DBusMessage * wpas_dbus_new_success_reply(DBusMessage *message)
 {
 	DBusMessage *reply;
 	unsigned int success = 1;

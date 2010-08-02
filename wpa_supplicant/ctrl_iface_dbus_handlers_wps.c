@@ -164,6 +164,32 @@ DBusMessage * wpas_dbus_iface_wps_reg(DBusMessage *message,
 
 
 /**
+ * wpas_dbus_iface_wps_stop - Stop the credentials request
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: %wpa_supplicant data structure
+ * Returns: A dbus message containing a UINT32 indicating success (1) or
+ *          failure (0)
+ *
+ * Handler function for "wpsStop" method call
+ */
+DBusMessage * wpas_dbus_iface_wps_stop(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s)
+{
+	int ret = 0;
+
+	ret = wpas_wps_stop(wpa_s);
+
+	if (ret < 0) {
+		return dbus_message_new_error(message,
+					      WPAS_ERROR_WPS_STOP_ERROR,
+					      "Could not stop credentials request");
+	}
+
+	return wpas_dbus_new_success_reply(message);
+}
+
+
+/**
  * wpas_dbus_iface_wps_get_process_credentials - Check if credentials are processed
  * @message: Pointer to incoming dbus message
  * @wpa_s: %wpa_supplicant data structure

@@ -96,6 +96,9 @@ DBusMessage * wpas_dbus_iface_wps_pin(DBusMessage *message,
 DBusMessage * wpas_dbus_iface_wps_reg(DBusMessage *message,
 				      struct wpa_supplicant *wpa_s);
 
+DBusMessage * wpas_dbus_iface_wps_stop(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s);
+
 DBusMessage * wpas_dbus_iface_wps_get_process_credentials(DBusMessage *message,
 				      struct wpa_supplicant *wpa_s);
 

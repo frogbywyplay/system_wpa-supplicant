@@ -616,6 +616,13 @@ int wpas_wps_start_reg(struct wpa_supplicant *wpa_s, const u8 *bssid,
 }
 
 
+int wpas_wps_stop(struct wpa_supplicant *wpa_s)
+{
+	wpas_clear_wps(wpa_s);
+	return 0;
+}
+
+
 static int wpas_wps_new_psk_cb(void *ctx, const u8 *mac_addr, const u8 *psk,
 			       size_t psk_len)
 {

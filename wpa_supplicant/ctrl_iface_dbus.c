@@ -553,6 +553,8 @@ static DBusHandlerResult wpas_iface_message_handler(DBusConnection *connection,
 			reply = wpas_dbus_iface_wps_pin(message, wpa_s);
 		else if (!os_strcmp(method, "wpsReg"))
 			reply = wpas_dbus_iface_wps_reg(message, wpa_s);
+		else if (!os_strcmp(method, "wpsStop"))
+			reply = wpas_dbus_iface_wps_stop(message, wpa_s);
 		else if (!os_strcmp(method, "wpsGetProcessCredentials"))
 			reply = wpas_dbus_iface_wps_get_process_credentials(message, wpa_s);
 		else if (!os_strcmp(method, "wpsSetProcessCredentials"))

@@ -80,6 +80,8 @@ struct wps_credential;
 	WPAS_DBUS_IFACE_INTERFACE ".WpsPinError"
 #define WPAS_ERROR_WPS_REG_ERROR \
 	WPAS_DBUS_IFACE_INTERFACE ".WpsRegError"
+#define WPAS_ERROR_WPS_STOP_ERROR \
+	WPAS_DBUS_IFACE_INTERFACE ".WpsStopError"
 
 #define WPAS_DBUS_BSSID_FORMAT "%02x%02x%02x%02x%02x%02x"
 

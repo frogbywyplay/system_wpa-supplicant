@@ -669,7 +669,6 @@ wpa_driver_ralink_event_wireless(struct wpa_driver_ralink_data *drv,
 					iwe->u.data.length);
 			} else if (iwe->u.data.flags == RT_INTERFACE_DOWN) {
 				drv->g_driver_down = 1;
-				eloop_terminate();
 			} 
 			else if (iwe->u.data.flags == RT_INTERFACE_UP) 
 			{

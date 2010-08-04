@@ -21,6 +21,8 @@
 #include "ctrl_iface_dbus.h"
 #include "ctrl_iface_dbus_handlers.h"
 
+#ifdef CONFIG_WPS
+
 /**
  * wpas_dbus_iface_wps_pbc - Request credentials using WPS PBC method
  * @message: Pointer to incoming dbus message
@@ -247,3 +249,5 @@ DBusMessage * wpas_dbus_iface_wps_set_process_credentials(
 
 	return wpas_dbus_new_success_reply(message);
 }
+
+#endif /* CONFIG_WPS */

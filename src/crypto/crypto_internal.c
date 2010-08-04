@@ -793,7 +793,7 @@ void crypto_global_deinit(void)
 #endif /* CONFIG_TLS_INTERNAL */
 
 
-#if defined(EAP_FAST) || defined(CONFIG_WPS)
+#if defined(EAP_FAST) || defined(CONFIG_WPS) || defined(EAP_IKEV2_DYNAMIC) || defined(EAP_IKEV2)
 
 int crypto_mod_exp(const u8 *base, size_t base_len,
 		   const u8 *power, size_t power_len,

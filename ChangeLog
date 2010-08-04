@@ -1,6 +1,13 @@
 WPA Supplicant WYPLAY change log file.
 Created on 02/03/2010
-Last Modification Date: 02/03/2010
+Last Modification Date: 04/08/2010
+
+0.6.10-1 -- 04/08/2010
+- Updated to WPA Suppliant 0.6.10.
+- Applied a patch from Ralink to add WPS support to the Ralink driver and fixed
+  a few mistakes. WPS support does not work with the wext driver.
+- Updated the DBus interface to be able to control WPS. Some parts have been
+  backported from WPA Suppliant 0.7.2. Other parts were made from scratch.
 
 0.6.3-1 -- 02/03/2010
 - Fix non-quoted WEP and WPA_PSK keys

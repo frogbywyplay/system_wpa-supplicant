@@ -1089,6 +1089,7 @@ wpa_driver_ralink_get_scan_results(void *priv,
 			  wbi->Ssid.SsidLength);
 		results[ap_num].ssid_len = wbi->Ssid.SsidLength;
 		results[ap_num].freq = (wbi->Configuration.DSConfig / 1000);
+		results[ap_num].level = wbi->Rssi;
 
 		wpa_printf(MSG_DEBUG, "SSID - %s", wbi->Ssid.Ssid);
 		/* get ie's */
@@ -1224,6 +1225,7 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 		
 
 		os_memcpy(r->bssid, wbi->MacAddress, ETH_ALEN);
+		r->level = wbi->Rssi;
 
 		extra_len += (2 + wbi->Ssid.SsidLength);
 		r->ie_len = extra_len + var_ie_len;

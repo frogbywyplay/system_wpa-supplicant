@@ -1022,117 +1022,6 @@ static int wpa_driver_ralink_scan(void *priv, const u8 *ssid, size_t ssid_len)
 	return ret;
 }
 
-static int
-wpa_driver_ralink_get_scan_results(void *priv,
-				   struct wpa_scan_result *results,
-				   size_t max_size)
-{
-	struct wpa_driver_ralink_data *drv = priv;
-	UCHAR *buf = NULL;
-	size_t buf_len;
-	NDIS_802_11_BSSID_LIST_EX *wsr;
-	NDIS_WLAN_BSSID_EX *wbi;
-	struct iwreq iwr;
-	size_t ap_num;
-	u8 *pos, *end;
-
-	if (drv->g_driver_down == 1)
-		return -1;
-	wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
-
-	if (drv->we_version_compiled >= 17) {
-		buf_len = 8192;
-	} else {
-		buf_len = 4096;
-	}
-	
-	for (;;)
-	{
-		buf = os_zalloc(buf_len);
-		iwr.u.data.length = buf_len;
-			
-	if (buf == NULL)
-			return 0;
-
-	wsr = (NDIS_802_11_BSSID_LIST_EX *) buf;
-
-	wsr->NumberOfItems = 0;
-	os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
-	iwr.u.data.pointer = (void *) buf;
-	iwr.u.data.flags = OID_802_11_BSSID_LIST;
-
-		if (ioctl(drv->ioctl_sock, RT_PRIV_IOCTL, &iwr) == 0)
-			break;
-
-		if (errno == E2BIG && buf_len < 65535) {
-		os_free(buf);
-			buf = NULL;
-			buf_len *= 2;
-			if (buf_len > 65535)
-				buf_len = 65535; /* 16-bit length field */
-			wpa_printf(MSG_DEBUG, "Scan results did not fit - "
-				   "trying larger buffer (%lu bytes)",
-				   (unsigned long) buf_len);
-		} else {
-			perror("ioctl[RT_PRIV_IOCTL]");
-			os_free(buf);
-			return 0;
-		}
-	}
-
-	os_memset(results, 0, max_size * sizeof(struct wpa_scan_result));
-
-	for (ap_num = 0, wbi = wsr->Bssid; ap_num < wsr->NumberOfItems;
-	     ++ap_num) {
-		os_memcpy(results[ap_num].bssid, &wbi->MacAddress, ETH_ALEN);
-		os_memcpy(results[ap_num].ssid, wbi->Ssid.Ssid,
-			  wbi->Ssid.SsidLength);
-		results[ap_num].ssid_len = wbi->Ssid.SsidLength;
-		results[ap_num].freq = (wbi->Configuration.DSConfig / 1000);
-		results[ap_num].level = wbi->Rssi;
-
-		wpa_printf(MSG_DEBUG, "SSID - %s", wbi->Ssid.Ssid);
-		/* get ie's */
-		wpa_hexdump(MSG_DEBUG, "RALINK: AP IEs",
-			    (u8 *) wbi + sizeof(*wbi) - 1, wbi->IELength);
-
-		pos = (u8 *) wbi + sizeof(*wbi) - 1;
-		end = (u8 *) wbi + sizeof(*wbi) + wbi->IELength;
-
-		if (wbi->IELength < sizeof(NDIS_802_11_FIXED_IEs))
-			break;
-
-		pos += sizeof(NDIS_802_11_FIXED_IEs) - 2;
-		os_memcpy(&results[ap_num].caps, pos, 2);
-		pos += 2;
-
-		while (pos + 1 < end && pos + 2 + pos[1] <= end) {
-			u8 ielen = 2 + pos[1];
-
-			if (ielen > SSID_MAX_WPA_IE_LEN) {
-				pos += ielen;
-				continue;
-			}
-
-			if (pos[0] == WLAN_EID_VENDOR_SPECIFIC &&
-			    pos[1] >= 4 &&
-			    os_memcmp(pos + 2, "\x00\x50\xf2\x01", 4) == 0) {
-				os_memcpy(results[ap_num].wpa_ie, pos, ielen);
-				results[ap_num].wpa_ie_len = ielen;
-			} else if (pos[0] == WLAN_EID_RSN) {
-				os_memcpy(results[ap_num].rsn_ie, pos, ielen);
-				results[ap_num].rsn_ie_len = ielen;
-			}
-			pos += ielen;
-		}
-
-		wbi = (NDIS_WLAN_BSSID_EX *) ((u8 *) wbi + wbi->Length);
-	}
-
-	os_free(buf);
-	return ap_num;
-}
-
 static u8 * wpa_driver_ralink_scan2(struct wpa_driver_ralink_data *drv, size_t *len)
 {
 	struct iwreq iwr;
@@ -1822,7 +1711,6 @@ const struct wpa_driver_ops wpa_driver_ralink_ops = {
 	.deinit = wpa_driver_ralink_deinit,
 	.set_countermeasures	= wpa_driver_ralink_set_countermeasures,
 	.scan = wpa_driver_ralink_scan,
-	/*.get_scan_results = wpa_driver_ralink_get_scan_results,*/
 	.get_scan_results2 = wpa_driver_ralink_get_scan_results2,
 	.deauthenticate = wpa_driver_ralink_deauthenticate,
 	.disassociate = wpa_driver_ralink_disassociate,

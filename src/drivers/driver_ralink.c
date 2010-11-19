@@ -1074,7 +1074,7 @@ wpa_driver_ralink_get_scan_results(void *priv,
 				   "trying larger buffer (%lu bytes)",
 				   (unsigned long) buf_len);
 		} else {
-			perror("ioctl[SIOCGIWSCAN]");
+			perror("ioctl[RT_PRIV_IOCTL]");
 			os_free(buf);
 			return 0;
 		}
@@ -1133,7 +1133,106 @@ wpa_driver_ralink_get_scan_results(void *priv,
 	return ap_num;
 }
 
+static u8 * wpa_driver_ralink_scan2(struct wpa_driver_ralink_data *drv, size_t *len)
+{
+	struct iwreq iwr;
+	u8 *res_buf;
+	size_t res_buf_len;
 
+	res_buf_len = IW_SCAN_MAX_DATA;
+	for (;;) {
+		res_buf = os_malloc(res_buf_len);
+		if (res_buf == NULL) {
+			return NULL;
+		}
+		os_memset(&iwr, 0, sizeof(iwr));
+		os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+		iwr.u.data.pointer = res_buf;
+		iwr.u.data.length = res_buf_len;
+		if (ioctl(drv->ioctl_sock, SIOCGIWSCAN, &iwr) == 0) {
+			break;
+		}
+		if (errno == E2BIG && res_buf_len < 65535) {
+			os_free(res_buf);
+			res_buf = NULL;
+			res_buf_len *= 2;
+			if (res_buf_len > 65535)
+				res_buf_len = 65535; /* 16-bit length field */
+			wpa_printf(MSG_DEBUG, "Scan results did not fit - "
+				   "trying larger buffer (%lu bytes)",
+				   (unsigned long) res_buf_len);
+		} else {
+			perror("ioctl[SIOCGIWSCAN]");
+			os_free(res_buf);
+			return NULL;
+		}
+	}
+	if (iwr.u.data.length > res_buf_len) {
+		os_free(res_buf);
+		return NULL;
+	}
+	*len = iwr.u.data.length;
+	return res_buf;
+}
+
+
+static struct wpa_scan_results * wpa_driver_ralink_parse_scan_event(struct wpa_driver_ralink_data *drv)
+{
+	size_t len;
+	int first;
+	u8 *res_buf;
+	struct iw_event iwe_buf, *iwe = &iwe_buf;
+	char *pos, *end;
+	struct wpa_scan_results *res;
+
+	res_buf = wpa_driver_ralink_scan2(drv, &len);
+	if (res_buf == NULL) {
+		return NULL;
+	}
+	res = os_zalloc(sizeof(*res));
+	if (res == NULL) {
+		os_free(res_buf);
+		return NULL;
+	}
+	pos = (char *) res_buf;
+	end = (char *) res_buf + len;
+	while (pos + IW_EV_LCP_LEN <= end) {
+		/* Event data may be unaligned, so make a local, aligned copy
+		 * before processing. */
+		os_memcpy(&iwe_buf, pos, IW_EV_LCP_LEN);
+		if (iwe->len <= IW_EV_LCP_LEN) {
+			break;
+		}
+		os_memcpy(&iwe_buf, pos, sizeof(struct iw_event));
+		switch (iwe->cmd) {
+			case IWEVQUAL: {
+				struct wpa_scan_res *r;
+				struct wpa_scan_res **tmp;
+
+				r = os_zalloc(sizeof(*r));
+				if (r == NULL) {
+				        // TODO free all
+				        return NULL;
+				}
+				r->qual = iwe->u.qual.qual;
+				/* appends this new entry */
+				tmp = os_realloc(res->res, (res->num + 1) * sizeof(struct wpa_scan_res *));
+				if (tmp == NULL) {
+				        // TODO free all
+				        os_free(res);
+				        return NULL;
+				}
+				tmp[res->num++] = r;
+				res->res = tmp;
+				break;
+			}
+		}
+		pos += iwe->len;
+	}
+	os_free(res_buf);
+	res_buf = NULL;
+	return res;
+}
 
 struct wpa_scan_results *
 wpa_driver_ralink_get_scan_results2(void *priv)
@@ -1146,6 +1245,7 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 	NDIS_WLAN_BSSID_EX *wbi;
 	struct iwreq iwr;
 	size_t ap_num;
+	struct wpa_scan_results *iwscan2_res;
 	u8 *pos;
 
 	if (drv->g_driver_down == 1)
@@ -1187,7 +1287,7 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 				   "trying larger buffer (%lu bytes)",
 				   (unsigned long) buf_len);
 		} else {
-			perror("ioctl[SIOCGIWSCAN]");
+			perror("ioctl[RT_PRIV_IOCTL]");
 			os_free(buf);
 			return NULL;
 		}
@@ -1198,7 +1298,12 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 		os_free(buf);
 		return NULL;
 	}
-
+	iwscan2_res = wpa_driver_ralink_parse_scan_event(drv);
+	if (iwscan2_res == NULL) {
+		wpa_printf(MSG_DEBUG, "%s wpa_driver_ralink_parse_scan_event failed\n", __FUNCTION__);
+		os_free(buf);
+		return NULL;
+	}
 	res->num = 0;
 	for (ap_num = 0, wbi = wsr->Bssid; ap_num < wsr->NumberOfItems; ++ap_num) 
 	{
@@ -1226,6 +1331,7 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 
 		os_memcpy(r->bssid, wbi->MacAddress, ETH_ALEN);
 		r->level = wbi->Rssi;
+		r->qual = iwscan2_res->res[ap_num]->qual;
 
 		extra_len += (2 + wbi->Ssid.SsidLength);
 		r->ie_len = extra_len + var_ie_len;
@@ -1266,6 +1372,7 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 	}
 
 	os_free(buf);
+	os_free(iwscan2_res);
 	return res;
 }
 

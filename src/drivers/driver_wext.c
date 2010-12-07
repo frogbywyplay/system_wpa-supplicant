@@ -1260,7 +1260,7 @@ static void wext_get_scan_qual(struct iw_event *iwe,
 {
 	res->res.qual = iwe->u.qual.qual;
 	res->res.noise = iwe->u.qual.noise;
-	res->res.level = (char)iwe->u.qual.level;
+	res->res.level = iwe->u.qual.level;
 }
 
 

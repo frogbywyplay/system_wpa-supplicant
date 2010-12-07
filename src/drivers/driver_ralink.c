@@ -1022,332 +1022,251 @@ static int wpa_driver_ralink_scan(void *priv, const u8 *ssid, size_t ssid_len)
 	return ret;
 }
 
-static u8 * wpa_driver_ralink_giwscan(struct wpa_driver_ralink_data *drv, size_t *len)
+static int
+wpa_driver_ralink_get_scan_results(void *priv,
+				   struct wpa_scan_result *results,
+				   size_t max_size)
 {
+	struct wpa_driver_ralink_data *drv = priv;
+	UCHAR *buf = NULL;
+	size_t buf_len;
+	NDIS_802_11_BSSID_LIST_EX *wsr;
+	NDIS_WLAN_BSSID_EX *wbi;
 	struct iwreq iwr;
-	u8 *res_buf;
-	size_t res_buf_len = IW_SCAN_MAX_DATA;
+	size_t ap_num;
+	u8 *pos, *end;
 
-	for (;;) {
-		res_buf = os_malloc(res_buf_len);
-		if (res_buf == NULL) {
-			return NULL;
-		}
-		os_memset(&iwr, 0, sizeof(iwr));
-		os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
-		iwr.u.data.pointer = res_buf;
-		iwr.u.data.length = res_buf_len;
-		if (ioctl(drv->ioctl_sock, SIOCGIWSCAN, &iwr) == 0) {
+	if (drv->g_driver_down == 1)
+		return -1;
+	wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+
+	if (drv->we_version_compiled >= 17) {
+		buf_len = 8192;
+	} else {
+		buf_len = 4096;
+	}
+	
+	for (;;)
+	{
+		buf = os_zalloc(buf_len);
+		iwr.u.data.length = buf_len;
+			
+	if (buf == NULL)
+			return 0;
+
+	wsr = (NDIS_802_11_BSSID_LIST_EX *) buf;
+
+	wsr->NumberOfItems = 0;
+	os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+	iwr.u.data.pointer = (void *) buf;
+	iwr.u.data.flags = OID_802_11_BSSID_LIST;
+
+		if (ioctl(drv->ioctl_sock, RT_PRIV_IOCTL, &iwr) == 0)
 			break;
-		}
-		if (errno == E2BIG && res_buf_len < 65535) {
-			os_free(res_buf);
-			res_buf = NULL;
-			res_buf_len *= 2;
-			if (res_buf_len > 65535)
-				res_buf_len = 65535; /* 16-bit length field */
+
+		if (errno == E2BIG && buf_len < 65535) {
+		os_free(buf);
+			buf = NULL;
+			buf_len *= 2;
+			if (buf_len > 65535)
+				buf_len = 65535; /* 16-bit length field */
 			wpa_printf(MSG_DEBUG, "Scan results did not fit - "
 				   "trying larger buffer (%lu bytes)",
-				   (unsigned long) res_buf_len);
+				   (unsigned long) buf_len);
 		} else {
 			perror("ioctl[SIOCGIWSCAN]");
-			os_free(res_buf);
+			os_free(buf);
+			return 0;
+		}
+	}
+
+	os_memset(results, 0, max_size * sizeof(struct wpa_scan_result));
+
+	for (ap_num = 0, wbi = wsr->Bssid; ap_num < wsr->NumberOfItems;
+	     ++ap_num) {
+		os_memcpy(results[ap_num].bssid, &wbi->MacAddress, ETH_ALEN);
+		os_memcpy(results[ap_num].ssid, wbi->Ssid.Ssid,
+			  wbi->Ssid.SsidLength);
+		results[ap_num].ssid_len = wbi->Ssid.SsidLength;
+		results[ap_num].freq = (wbi->Configuration.DSConfig / 1000);
+
+		wpa_printf(MSG_DEBUG, "SSID - %s", wbi->Ssid.Ssid);
+		/* get ie's */
+		wpa_hexdump(MSG_DEBUG, "RALINK: AP IEs",
+			    (u8 *) wbi + sizeof(*wbi) - 1, wbi->IELength);
+
+		pos = (u8 *) wbi + sizeof(*wbi) - 1;
+		end = (u8 *) wbi + sizeof(*wbi) + wbi->IELength;
+
+		if (wbi->IELength < sizeof(NDIS_802_11_FIXED_IEs))
+			break;
+
+		pos += sizeof(NDIS_802_11_FIXED_IEs) - 2;
+		os_memcpy(&results[ap_num].caps, pos, 2);
+		pos += 2;
+
+		while (pos + 1 < end && pos + 2 + pos[1] <= end) {
+			u8 ielen = 2 + pos[1];
+
+			if (ielen > SSID_MAX_WPA_IE_LEN) {
+				pos += ielen;
+				continue;
+			}
+
+			if (pos[0] == WLAN_EID_VENDOR_SPECIFIC &&
+			    pos[1] >= 4 &&
+			    os_memcmp(pos + 2, "\x00\x50\xf2\x01", 4) == 0) {
+				os_memcpy(results[ap_num].wpa_ie, pos, ielen);
+				results[ap_num].wpa_ie_len = ielen;
+			} else if (pos[0] == WLAN_EID_RSN) {
+				os_memcpy(results[ap_num].rsn_ie, pos, ielen);
+				results[ap_num].rsn_ie_len = ielen;
+			}
+			pos += ielen;
+		}
+
+		wbi = (NDIS_WLAN_BSSID_EX *) ((u8 *) wbi + wbi->Length);
+	}
+
+	os_free(buf);
+	return ap_num;
+}
+
+
+
+struct wpa_scan_results *
+wpa_driver_ralink_get_scan_results2(void *priv)
+{	
+	struct wpa_scan_results *res;
+	struct wpa_driver_ralink_data *drv = priv;
+	UCHAR *buf = NULL;
+	size_t buf_len;
+	NDIS_802_11_BSSID_LIST_EX *wsr;
+	NDIS_WLAN_BSSID_EX *wbi;
+	struct iwreq iwr;
+	size_t ap_num;
+	u8 *pos;
+
+	if (drv->g_driver_down == 1)
+		return NULL;
+	
+	wpa_printf(MSG_DEBUG, "%s", __FUNCTION__);
+
+	if (drv->we_version_compiled >= 17) {
+		buf_len = 8192;
+	} else {
+		buf_len = 4096;
+	}
+	
+	for (;;)
+	{
+		buf = os_zalloc(buf_len);
+		iwr.u.data.length = buf_len;
+			
+		if (buf == NULL)
+			return NULL;
+		
+		wsr = (NDIS_802_11_BSSID_LIST_EX *) buf;
+
+		wsr->NumberOfItems = 0;
+		os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+		iwr.u.data.pointer = (void *) buf;
+		iwr.u.data.flags = OID_802_11_BSSID_LIST;
+
+		if (ioctl(drv->ioctl_sock, RT_PRIV_IOCTL, &iwr) == 0)
+			break;
+
+		if (errno == E2BIG && buf_len < 65535) {
+			os_free(buf);
+			buf = NULL;
+			buf_len *= 2;
+			if (buf_len > 65535)
+				buf_len = 65535; /* 16-bit length field */
+			wpa_printf(MSG_DEBUG, "Scan results did not fit - "
+				   "trying larger buffer (%lu bytes)",
+				   (unsigned long) buf_len);
+		} else {
+			perror("ioctl[SIOCGIWSCAN]");
+			os_free(buf);
 			return NULL;
 		}
 	}
-	if (iwr.u.data.length > res_buf_len) {
-		os_free(res_buf);
+
+	res = os_zalloc(sizeof(*res));
+	if (res == NULL) {
+		os_free(buf);
 		return NULL;
 	}
-	*len = iwr.u.data.length;
-	return res_buf;
-}
 
+	res->num = 0;
+	for (ap_num = 0, wbi = wsr->Bssid; ap_num < wsr->NumberOfItems; ++ap_num) 
+	{
+		struct wpa_scan_res **tmp;
+		struct wpa_scan_res *r = NULL;
+		size_t extra_len = 0, var_ie_len = 0;
+		u8 *pos2;
 
-/*
- * Data structure for collecting ralink scan results. This is needed to allow
- * the various methods of reporting IEs to be combined into a single IE buffer.
- */
-struct ralink_scan_data {
-	struct wpa_scan_res res;
-	u8 *ie;
-	size_t ie_len;
-	u8 ssid[32];
-	size_t ssid_len;
-	int maxrate;
-};
-
-
-static void ralink_get_scan_mode(struct iw_event *iwe,
-			       struct ralink_scan_data *res)
-{
-	if (iwe->u.mode == IW_MODE_ADHOC)
-		res->res.caps |= IEEE80211_CAP_IBSS;
-	else if (iwe->u.mode == IW_MODE_MASTER || iwe->u.mode == IW_MODE_INFRA)
-		res->res.caps |= IEEE80211_CAP_ESS;
-}
-
-
-static void ralink_get_scan_ssid(struct iw_event *iwe,
-			       struct ralink_scan_data *res, char *custom,
-			       char *end)
-{
-	int ssid_len = iwe->u.essid.length;
-	if (custom + ssid_len > end)
-		return;
-	if (iwe->u.essid.flags &&
-	    ssid_len > 0 &&
-	    ssid_len <= IW_ESSID_MAX_SIZE) {
-		os_memcpy(res->ssid, custom, ssid_len);
-		res->ssid_len = ssid_len;
-	}
-}
-
-
-static void ralink_get_scan_freq(struct iw_event *iwe,
-			       struct ralink_scan_data *res)
-{
-	int divi = 1000000, i;
-
-	if (iwe->u.freq.e == 0) {
-		/*
-		 * Some drivers do not report frequency, but a channel.
-		 * Try to map this to frequency by assuming they are using
-		 * IEEE 802.11b/g.  But don't overwrite a previously parsed
-		 * frequency if the driver sends both frequency and channel,
-		 * since the driver may be sending an A-band channel that we
-		 * don't handle here.
-		 */
-
-		if (res->res.freq)
-			return;
-
-		if (iwe->u.freq.m >= 1 && iwe->u.freq.m <= 13) {
-			res->res.freq = 2407 + 5 * iwe->u.freq.m;
-			return;
-		} else if (iwe->u.freq.m == 14) {
-			res->res.freq = 2484;
-			return;
-		}
-	}
-
-	if (iwe->u.freq.e > 6) {
-		wpa_printf(MSG_DEBUG, "Invalid freq in scan results (BSSID="
-			   MACSTR " m=%d e=%d)",
-			   MAC2STR(res->res.bssid), iwe->u.freq.m,
-			   iwe->u.freq.e);
-		return;
-	}
-
-	for (i = 0; i < iwe->u.freq.e; i++)
-		divi /= 10;
-	res->res.freq = iwe->u.freq.m / divi;
-}
-
-
-static void ralink_get_scan_qual(struct iw_event *iwe,
-			       struct ralink_scan_data *res)
-{
-	res->res.qual = iwe->u.qual.qual;
-	res->res.noise = iwe->u.qual.noise;
-	res->res.level = iwe->u.qual.level;
-}
-
-
-static void ralink_get_scan_encode(struct iw_event *iwe,
-				 struct ralink_scan_data *res)
-{
-	if (!(iwe->u.data.flags & IW_ENCODE_DISABLED))
-		res->res.caps |= IEEE80211_CAP_PRIVACY;
-}
-
-static void ralink_get_scan_iwevgenie(struct iw_event *iwe,
-				    struct ralink_scan_data *res, char *custom,
-				    char *end)
-{
-	char *genie, *gpos, *gend;
-	u8 *tmp;
-
-	if (iwe->u.data.length == 0)
-		return;
-
-	gpos = genie = custom;
-	gend = genie + iwe->u.data.length;
-	if (gend > end) {
-		wpa_printf(MSG_INFO, "IWEVGENIE overflow");
-		return;
-	}
-
-	tmp = os_realloc(res->ie, res->ie_len + gend - gpos);
-	if (tmp == NULL)
-		return;
-	os_memcpy(tmp + res->ie_len, gpos, gend - gpos);
-	res->ie = tmp;
-	res->ie_len += gend - gpos;
-}
-
-static void wpa_driver_ralink_add_scan_entry(struct wpa_scan_results *res,
-					     struct ralink_scan_data *data)
-{
-	struct wpa_scan_res **tmp;
-	struct wpa_scan_res *r;
-	size_t extra_len;
-	u8 *pos, *end, *ssid_ie = NULL, *rate_ie = NULL;
-
-	/* Figure out whether we need to fake any IEs */
-	pos = data->ie;
-	end = pos + data->ie_len;
-	while (pos && pos + 1 < end) {
-		if (pos + 2 + pos[1] > end)
-			break;
-		if (pos[0] == WLAN_EID_SSID)
-			ssid_ie = pos;
-		else if (pos[0] == WLAN_EID_SUPP_RATES)
-			rate_ie = pos;
-		else if (pos[0] == WLAN_EID_EXT_SUPP_RATES)
-			rate_ie = pos;
-		pos += 2 + pos[1];
-	}
-
-	extra_len = 0;
-	if (ssid_ie == NULL)
-		extra_len += 2 + data->ssid_len;
-	if (rate_ie == NULL && data->maxrate)
+		/* SSID data element */
+		extra_len += 2 + wbi->Ssid.SsidLength;
+#if 0
+		/* MaxRate data element */
 		extra_len += 3;
+#endif
+		var_ie_len = wbi->IELength - sizeof(NDIS_802_11_FIXED_IEs);
+		r = os_zalloc(sizeof(*r) + extra_len + var_ie_len);
+		if (r == NULL)
+			break;
 
-	r = os_zalloc(sizeof(*r) + extra_len + data->ie_len);
-	if (r == NULL)
-		return;
-	os_memcpy(r, &data->res, sizeof(*r));
-	r->ie_len = extra_len + data->ie_len;
-	pos = (u8 *) (r + 1);
-	if (ssid_ie == NULL) {
+		wpa_printf(MSG_DEBUG, "SSID - %s", wbi->Ssid.Ssid);
+		/* get ie's */
+		wpa_hexdump(MSG_DEBUG, "RALINK: AP IEs",
+			    (u8 *) &wbi->IEs[0], wbi->IELength);
+		
+
+		os_memcpy(r->bssid, wbi->MacAddress, ETH_ALEN);
+
+		extra_len += (2 + wbi->Ssid.SsidLength);
+		r->ie_len = extra_len + var_ie_len;
+		pos2 = (u8 *) (r + 1);
+		
 		/*
 		 * Generate a fake SSID IE since the driver did not report
 		 * a full IE list.
 		 */
-		*pos++ = WLAN_EID_SSID;
-		*pos++ = data->ssid_len;
-		os_memcpy(pos, data->ssid, data->ssid_len);
-		pos += data->ssid_len;
-	}
-	if (rate_ie == NULL && data->maxrate) {
-		/*
-		 * Generate a fake Supported Rates IE since the driver did not
-		 * report a full IE list.
-		 */
-		*pos++ = WLAN_EID_SUPP_RATES;
-		*pos++ = 1;
-		*pos++ = data->maxrate;
-	}
-	if (data->ie)
-		os_memcpy(pos, data->ie, data->ie_len);
+		*pos2++ = WLAN_EID_SSID;
+		*pos2++ = wbi->Ssid.SsidLength;
+		os_memcpy(pos2, wbi->Ssid.Ssid, wbi->Ssid.SsidLength);
+		pos2 += wbi->Ssid.SsidLength;
 
-	tmp = os_realloc(res->res,
+		r->freq = (wbi->Configuration.DSConfig / 1000);				
+
+		pos = (u8 *) wbi + sizeof(*wbi) - 1;
+
+		pos += sizeof(NDIS_802_11_FIXED_IEs) - 2;
+		os_memcpy(&(r->caps), pos, 2);
+		pos += 2;
+		
+		if (wbi->IELength > sizeof(NDIS_802_11_FIXED_IEs))
+		{
+			os_memcpy(pos2, pos, var_ie_len);
+		}
+		
+		wbi = (NDIS_WLAN_BSSID_EX *) ((u8 *) wbi + wbi->Length);
+
+		tmp = os_realloc(res->res,
 			 (res->num + 1) * sizeof(struct wpa_scan_res *));
-	if (tmp == NULL) {
-		os_free(r);
-		return;
-	}
-	tmp[res->num++] = r;
-	res->res = tmp;
-}
-
-static int ralink_19_iw_point(struct wpa_driver_ralink_data *drv, u16 cmd)
-{
-	return drv->we_version_compiled > 18 &&
-		(cmd == SIOCGIWESSID || cmd == SIOCGIWENCODE ||
-		 cmd == IWEVGENIE || cmd == IWEVCUSTOM);
-}
-
-/**
- * wpa_driver_ralink_get_scan_results - Fetch the latest scan results
- * @priv: Pointer to private ralink data from wpa_driver_ralink_init()
- * Returns: Scan results on success, -1 on failure
- */
-static struct wpa_scan_results * wpa_driver_ralink_get_scan_results2(void *priv)
-{
-	struct wpa_driver_ralink_data *drv = priv;
-	size_t ap_num = 0, len;
-	int first;
-	u8 *res_buf;
-	struct iw_event iwe_buf, *iwe = &iwe_buf;
-	char *pos, *end, *custom;
-	struct wpa_scan_results *res;
-	struct ralink_scan_data data;
-
-	res_buf = wpa_driver_ralink_giwscan(drv, &len);
-	if (res_buf == NULL) {
-		return NULL;
-	}
-	ap_num = 0;
-	first = 1;
-	res = os_zalloc(sizeof(*res));
-	if (res == NULL) {
-		os_free(res_buf);
-		return NULL;
-	}
-	pos = (char *) res_buf;
-	end = (char *) res_buf + len;
-	os_memset(&data, 0, sizeof(data));
-
-	while (pos + IW_EV_LCP_LEN <= end) {
-		/* Event data may be unaligned, so make a local, aligned copy
-		 * before processing. */
-		os_memcpy(&iwe_buf, pos, IW_EV_LCP_LEN);
-		if (iwe->len <= IW_EV_LCP_LEN)
-			break;
-
-		custom = pos + IW_EV_POINT_LEN;
-		if (ralink_19_iw_point(drv, iwe->cmd)) {
-			/* WE-19 removed the pointer from struct iw_point */
-			char *dpos = (char *) &iwe_buf.u.data.length;
-			int dlen = dpos - (char *) &iwe_buf;
-			os_memcpy(dpos, pos + IW_EV_LCP_LEN,
-				  sizeof(struct iw_event) - dlen);
-		} else {
-			os_memcpy(&iwe_buf, pos, sizeof(struct iw_event));
-			custom += IW_EV_POINT_OFF;
-		}
-		switch (iwe->cmd) {
-		case SIOCGIWAP:
-			if (!first)
-				wpa_driver_ralink_add_scan_entry(res, &data);
-			first = 0;
-			os_free(data.ie);
-			os_memset(&data, 0, sizeof(data));
-			os_memcpy(data.res.bssid,
-				  iwe->u.ap_addr.sa_data, ETH_ALEN);
-			break;
-		case SIOCGIWMODE:
-			ralink_get_scan_mode(iwe, &data);
-			break;
-		case SIOCGIWESSID:
-			ralink_get_scan_ssid(iwe, &data, custom, end);
-			break;
-		case SIOCGIWFREQ:
-			ralink_get_scan_freq(iwe, &data);
-			break;
-		case IWEVQUAL:
-			ralink_get_scan_qual(iwe, &data);
-			break;
-		case SIOCGIWENCODE:
-			ralink_get_scan_encode(iwe, &data);
-			break;
-		case IWEVGENIE:
-			ralink_get_scan_iwevgenie(iwe, &data, custom, end);
+		if (tmp == NULL) {
+			os_free(r);
 			break;
 		}
-		pos += iwe->len;
+		tmp[res->num++] = r;
+		res->res = tmp;
 	}
-	os_free(res_buf);
-	res_buf = NULL;
-	if (!first) {
-		wpa_driver_ralink_add_scan_entry(res, &data);
-	}
-	os_free(data.ie);
+
+	os_free(buf);
 	return res;
 }
+
 
 static int ralink_set_auth_mode(struct wpa_driver_ralink_data *drv,
 				NDIS_802_11_AUTHENTICATION_MODE mode)
@@ -1794,6 +1713,7 @@ const struct wpa_driver_ops wpa_driver_ralink_ops = {
 	.deinit = wpa_driver_ralink_deinit,
 	.set_countermeasures	= wpa_driver_ralink_set_countermeasures,
 	.scan = wpa_driver_ralink_scan,
+	/*.get_scan_results = wpa_driver_ralink_get_scan_results,*/
 	.get_scan_results2 = wpa_driver_ralink_get_scan_results2,
 	.deauthenticate = wpa_driver_ralink_deauthenticate,
 	.disassociate = wpa_driver_ralink_disassociate,

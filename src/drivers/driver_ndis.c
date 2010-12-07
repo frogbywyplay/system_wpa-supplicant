@@ -167,6 +167,9 @@ typedef struct NDIS_WLAN_BSSID_EX {
 	NDIS_802_11_SSID Ssid;
 	ULONG Privacy;
 	NDIS_802_11_RSSI Rssi;
+        UCHAR Quality;
+        UCHAR Noise;
+        UCHAR Level;
 	NDIS_802_11_NETWORK_TYPE NetworkTypeInUse;
 	NDIS_802_11_CONFIGURATION Configuration;
 	NDIS_802_11_NETWORK_INFRASTRUCTURE InfrastructureMode;

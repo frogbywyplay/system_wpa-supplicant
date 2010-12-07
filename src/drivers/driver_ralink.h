@@ -291,6 +291,9 @@ typedef struct PACKED _NDIS_WLAN_BSSID_EX
     UINT                                Privacy;            // WEP encryption requirement
     NDIS_802_11_RSSI                    Rssi;               // receive signal
                                                             // strength in dBm
+    UCHAR Quality;
+    UCHAR Noise;
+    UCHAR Level;
     NDIS_802_11_NETWORK_TYPE            NetworkTypeInUse;
     NDIS_802_11_CONFIGURATION           Configuration;
     NDIS_802_11_NETWORK_INFRASTRUCTURE  InfrastructureMode;

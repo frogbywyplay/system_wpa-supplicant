@@ -1238,7 +1238,10 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 		os_memcpy(pos2, wbi->Ssid.Ssid, wbi->Ssid.SsidLength);
 		pos2 += wbi->Ssid.SsidLength;
 
-		r->freq = (wbi->Configuration.DSConfig / 1000);				
+		r->freq = (wbi->Configuration.DSConfig / 1000);	
+		r->qual  = wbi->Quality;
+		r->noise = wbi->Noise;
+		r->level = wbi->Level;
 
 		pos = (u8 *) wbi + sizeof(*wbi) - 1;
 

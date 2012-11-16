@@ -82,6 +82,9 @@ CONFIG_DRIVER_ATMEL=y
 # Driver interface for Ralink driver
 #CONFIG_DRIVER_RALINK=y
 
+# Ralink driver provides signal information
+#CONFIG_DRIVER_RALINK_SIGNAL_INFO=n
+
 # Driver interface for generic Linux wireless extensions
 CONFIG_DRIVER_WEXT=y
 

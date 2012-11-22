@@ -1,6 +1,7 @@
-WPA Supplicant WYPLAY change log file.
 Created on 02/03/2010
-Last Modification Date: 04/08/2010
+
+0.6.10-5 -- 22/11/2012
+- Made signal information for Ralink driver optional.
 
 0.6.10-1 -- 04/08/2010
 - Updated to WPA Suppliant 0.6.10.

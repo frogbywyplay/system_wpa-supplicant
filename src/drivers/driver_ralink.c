@@ -49,6 +49,111 @@ struct wpa_driver_ralink_data {
 	u8 g_driver_down;
 };
 
+#ifndef CONFIG_DRIVER_RALINK_SIGNAL_INFO
+
+static int wpa_driver_ralink_wext_19_iw_point(struct wpa_driver_ralink_data *drv, u16 cmd)
+{
+	return drv->we_version_compiled > 18 &&
+		(cmd == SIOCGIWESSID || cmd == SIOCGIWENCODE ||
+		 cmd == IWEVGENIE || cmd == IWEVCUSTOM);
+}
+
+static void wpa_driver_ralink_complete_scan_results(struct wpa_driver_ralink_data *drv, struct wpa_scan_results * res)
+{
+	struct iwreq iwr;
+	u8 *res_buf;
+	size_t res_buf_len;
+	struct iw_event iwe_buf, *iwe = &iwe_buf;
+	char *pos, *end, *custom;
+	struct wpa_scan_res * scan_res;
+
+	res_buf_len = IW_SCAN_MAX_DATA;
+	for (;;) {
+		res_buf = os_malloc(res_buf_len);
+		if (res_buf == NULL)
+			return;
+		os_memset(&iwr, 0, sizeof(iwr));
+		os_strlcpy(iwr.ifr_name, drv->ifname, IFNAMSIZ);
+		iwr.u.data.pointer = res_buf;
+		iwr.u.data.length = res_buf_len;
+
+		if (ioctl(drv->ioctl_sock, SIOCGIWSCAN, &iwr) == 0)
+			break;
+
+		if (errno == E2BIG && res_buf_len < 65535) {
+			os_free(res_buf);
+			res_buf = NULL;
+			res_buf_len *= 2;
+			if (res_buf_len > 65535)
+				res_buf_len = 65535; /* 16-bit length field */
+			wpa_printf(MSG_DEBUG, "Scan results did not fit - "
+				   "trying larger buffer (%lu bytes)",
+				   (unsigned long) res_buf_len);
+		} else {
+			perror("ioctl[SIOCGIWSCAN]");
+			os_free(res_buf);
+			return;
+		}
+	}
+
+	if (iwr.u.data.length > res_buf_len) {
+		os_free(res_buf);
+		return;
+	}
+
+	pos = (char *) res_buf;
+	end = (char *) res_buf + iwr.u.data.length;
+	scan_res = NULL;
+
+	while (pos + IW_EV_LCP_LEN <= end) {
+		size_t scan_res_idx;
+
+		/* Event data may be unaligned, so make a local, aligned copy
+		 * before processing. */
+		os_memcpy(&iwe_buf, pos, IW_EV_LCP_LEN);
+		if (iwe->len <= IW_EV_LCP_LEN)
+			break;
+
+		custom = pos + IW_EV_POINT_LEN;
+		if (wpa_driver_ralink_wext_19_iw_point(drv, iwe->cmd)) {
+			/* WE-19 removed the pointer from struct iw_point */
+			char *dpos = (char *) &iwe_buf.u.data.length;
+			int dlen = dpos - (char *) &iwe_buf;
+			os_memcpy(dpos, pos + IW_EV_LCP_LEN,
+				  sizeof(struct iw_event) - dlen);
+		} else {
+			os_memcpy(&iwe_buf, pos, sizeof(struct iw_event));
+			custom += IW_EV_POINT_OFF;
+		}
+
+		switch (iwe->cmd) {
+		case SIOCGIWAP:
+			scan_res = NULL;
+			for (scan_res_idx = 0; scan_res_idx < res->num; ++scan_res_idx) {
+				if (memcmp(res->res[scan_res_idx]->bssid, iwe->u.ap_addr.sa_data, ETH_ALEN) == 0) {
+					scan_res = res->res[scan_res_idx];
+					break;
+				}
+			}
+			break;
+		case IWEVQUAL:
+			if (scan_res != NULL) {
+				scan_res->qual = iwe->u.qual.qual;
+				scan_res->noise = iwe->u.qual.noise;
+				scan_res->level = iwe->u.qual.level;
+			}
+			break;
+		default:
+			break;
+		}
+
+		pos += iwe->len;
+	}
+	os_free(res_buf);
+}
+
+#endif /* !CONFIG_DRIVER_RALINK_SIGNAL_INFO */
+
 static int ralink_set_oid(struct wpa_driver_ralink_data *drv,
 			  unsigned short oid, char *data, int len)
 {
@@ -1273,6 +1378,11 @@ wpa_driver_ralink_get_scan_results2(void *priv)
 	}
 
 	os_free(buf);
+
+#ifndef CONFIG_DRIVER_RALINK_SIGNAL_INFO
+	wpa_driver_ralink_complete_scan_results(drv, res);
+#endif /* !CONFIG_DRIVER_RALINK_SIGNAL_INFO */
+
 	return res;
 }
 

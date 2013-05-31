@@ -1,6 +1,15 @@
 Created on 02/03/2010
 
-0.6.10-5 -- 22/11/2012
+0.6.10-7 -- 31/05/2013
+- Vanilla Ralink drivers don't report signal information. In this case, we
+  get scan results from the WEXT interface if available, and merge signal
+  information into the original scan results. That should work with all Ralink
+  drivers as long as they have support for the WEXT interface. That removes the
+  need to change Ralink drivers. Besides, it's not even possible (or would be
+  difficult) with some driver versions as scan results are directly generated
+  by the firmware and passed as-is to the user space.
+
+0.6.10-6 -- 22/11/2012
 - Made signal information for Ralink driver optional.
 
 0.6.10-1 -- 04/08/2010

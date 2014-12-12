@@ -1043,7 +1043,9 @@ out:
 static const char *dont_quote[] = {
 	"key_mgmt", "proto", "pairwise", "auth_alg", "group", "eap",
 	"opensc_engine_path", "pkcs11_engine_path", "pkcs11_module_path",
-	"bssid", "wep_key0", "wep_key1", "wep_key2", "wep_key3", "psk", NULL
+	"bssid", "wep_key0", "wep_key1", "wep_key2", "wep_key3", "psk",
+	"scan_ssid", "wep_tx_keyidx", "priority", "mode", "proactive_key_caching",
+	"peerkey", "mixed_cell", "frequency", "wpa_ptk_rekey", NULL
 };
 
 static dbus_bool_t should_quote_opt(const char *key)
@@ -1144,6 +1146,8 @@ DBusMessage * wpas_dbus_iface_set_network(DBusMessage *message,
 		} else
 			goto error;
 
+    wpa_printf(MSG_ERROR, "dbus: network.set: key='%s', value='%s'",
+        entry.key, value);
 		if (wpa_config_set(ssid, entry.key, value, 0) < 0)
 			goto error;
 

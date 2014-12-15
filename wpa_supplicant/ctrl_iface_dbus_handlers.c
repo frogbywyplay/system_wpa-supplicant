@@ -1146,8 +1146,6 @@ DBusMessage * wpas_dbus_iface_set_network(DBusMessage *message,
 		} else
 			goto error;
 
-    wpa_printf(MSG_ERROR, "dbus: network.set: key='%s', value='%s'",
-        entry.key, value);
 		if (wpa_config_set(ssid, entry.key, value, 0) < 0)
 			goto error;
 

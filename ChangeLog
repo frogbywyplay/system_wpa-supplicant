@@ -1,5 +1,10 @@
 Created on 02/03/2010
 
+0.6.10-8 -- 15/12/2014
+- DBus: avoid escaping integer parameters when setting network parameters.
+  That mainly concerns scan_ssid. But others parameters such as priority and
+  frequency are impacted too.
+
 0.6.10-7 -- 31/05/2013
 - Vanilla Ralink drivers don't report signal information. In this case, we
   get scan results from the WEXT interface if available, and merge signal

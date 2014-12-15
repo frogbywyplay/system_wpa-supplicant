@@ -1,5 +1,8 @@
 Created on 02/03/2010
 
+0.6.10-9 -- 15/12/2014
+- DBus: remove debug trace.
+
 0.6.10-8 -- 15/12/2014
 - DBus: avoid escaping integer parameters when setting network parameters.
   That mainly concerns scan_ssid. But others parameters such as priority and

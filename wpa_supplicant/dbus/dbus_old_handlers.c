@@ -912,7 +912,9 @@ out:
 static const char * const dont_quote[] = {
 	"key_mgmt", "proto", "pairwise", "auth_alg", "group", "eap",
 	"opensc_engine_path", "pkcs11_engine_path", "pkcs11_module_path",
-	"bssid", "scan_freq", "freq_list", NULL
+	"bssid", "scan_freq", "freq_list","wep_key0", "wep_key1", "wep_key2", "wep_key3", "psk",
+	"scan_ssid", "wep_tx_keyidx", "priority", "mode", "proactive_key_caching",
+	"peerkey", "mixed_cell", "frequency", "wpa_ptk_rekey", NULL
 };
 
 

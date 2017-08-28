@@ -25,6 +25,26 @@
 #include "dbus_old_handlers.h"
 #include "dbus_dict_helpers.h"
 
+
+#define CAPABILITIES_PROTO_WPA				(1 << 0)
+#define CAPABILITIES_PROTO_WPA2				(1 << 1)
+#define CAPABILITIES_PROTO_WEP				(1 << 2)
+#define CAPABILITIES_MODE_ADHOC				(1 << 4)
+#define CAPABILITIES_MODE_INFRA				(1 << 5)
+#define CAPABILITIES_PREAUTH				(1 << 15)
+#define CAPABILITIES_KEYMGMT_EAP			(1 << 16)
+#define CAPABILITIES_KEYMGMT_PSK			(1 << 17)
+#define CAPABILITIES_KEYMGMT_WPA_NONE		(1 << 18)
+#define CAPABILITIES_KEYMGMT_FT_EAP			(1 << 19)
+#define CAPABILITIES_KEYMGMT_FT_PSK			(1 << 20)
+#define CAPABILITIES_CIPHER_NONE			(1 << 24)
+#define CAPABILITIES_CIPHER_WEP40			(1 << 25)
+#define CAPABILITIES_CIPHER_WEP104			(1 << 26)
+#define CAPABILITIES_CIPHER_TKIP			(1 << 27)
+#define CAPABILITIES_CIPHER_CCMP			(1 << 28)
+
+
+
 /**
  * wpas_dbus_new_invalid_opts_error - Return a new invalid options error message
  * @message: Pointer to incoming dbus message this error refers to
@@ -397,6 +417,92 @@ error:
 }
 
 
+
+
+static void wpa_dbus_parse_scan_result_capabilities(const u8 *wpa_ie, const u8* rsn_ie, struct wpa_bss *bss, u32* ext_cap)
+{
+	(*ext_cap) = 0;
+	struct wpa_ie_data data;
+	int has_ie = 0;
+
+	if (wpa_ie)
+	{
+		(*ext_cap) |= CAPABILITIES_PROTO_WPA;
+
+		if (wpa_parse_wpa_ie(wpa_ie, 2 + wpa_ie[1], &data) == 0)
+		{
+			has_ie = 1;
+		}
+	}
+
+	if (rsn_ie)
+	{
+		(*ext_cap) |= CAPABILITIES_PROTO_WPA2;
+
+		if (wpa_parse_wpa_ie(rsn_ie, 2 + rsn_ie[1], &data) == 0)
+		{
+			has_ie = 1;
+		}
+	}
+
+
+	if (bss)
+	{
+		if (! wpa_ie && !rsn_ie && (bss->caps & IEEE80211_CAP_PRIVACY))
+		{
+			(*ext_cap) |= CAPABILITIES_PROTO_WEP;
+			(*ext_cap) |=  CAPABILITIES_CIPHER_WEP40;
+			(*ext_cap) |= CAPABILITIES_CIPHER_WEP104;
+		}
+
+		if (bss->caps & IEEE80211_CAP_IBSS)
+			(*ext_cap) |= CAPABILITIES_MODE_ADHOC;
+
+		if (bss->caps & IEEE80211_CAP_ESS)
+			(*ext_cap) |= CAPABILITIES_MODE_INFRA;
+	}
+
+	if (! has_ie)
+		return;
+
+	if (data.key_mgmt & WPA_KEY_MGMT_IEEE8021X)
+		(*ext_cap) |= CAPABILITIES_KEYMGMT_EAP;
+
+	if (data.key_mgmt & WPA_KEY_MGMT_PSK)
+		(*ext_cap) |= CAPABILITIES_KEYMGMT_PSK;
+
+	if (data.key_mgmt & WPA_KEY_MGMT_WPA_NONE)
+		(*ext_cap) |= CAPABILITIES_KEYMGMT_WPA_NONE;
+
+#ifdef CONFIG_IEEE80211R
+	if (data.key_mgmt & WPA_KEY_MGMT_FT_IEEE8021X)
+		(*ext_cap) |= CAPABILITIES_KEYMGMT_FT_EAP;
+	if (data.key_mgmt & WPA_KEY_MGMT_FT_PSK)
+		(*ext_cap) |= CAPABILITIES_KEYMGMT_FT_PSK;
+#endif /* CONFIG_IEEE80211R */
+
+	if (data.pairwise_cipher & WPA_CIPHER_NONE)
+		*ext_cap |= CAPABILITIES_CIPHER_NONE;
+
+	if (data.pairwise_cipher & WPA_CIPHER_WEP40)
+		*ext_cap |= CAPABILITIES_CIPHER_WEP40;
+
+	if (data.pairwise_cipher & WPA_CIPHER_WEP104)
+		*ext_cap |= CAPABILITIES_CIPHER_WEP104;
+
+	if (data.pairwise_cipher & WPA_CIPHER_TKIP)
+ 		*ext_cap |= CAPABILITIES_CIPHER_TKIP;
+
+	if (data.pairwise_cipher & WPA_CIPHER_CCMP)
+		*ext_cap |= CAPABILITIES_CIPHER_CCMP;
+
+	if (data.capabilities & WPA_CAPABILITY_PREAUTH)
+		*ext_cap |= CAPABILITIES_PREAUTH;
+
+}
+
+
+
 /**
  * wpas_dbus_bssid_properties - Return the properties of a scanned network
  * @message: Pointer to incoming dbus message
@@ -414,6 +520,7 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	DBusMessage *reply;
 	DBusMessageIter iter, iter_dict;
 	const u8 *wpa_ie, *rsn_ie, *wps_ie;
+	u32 extended_capabilities = 0;
 
 	/* Dump the properties into a dbus message */
 	reply = dbus_message_new_method_return(message);
@@ -421,6 +528,8 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	wpa_ie = wpa_bss_get_vendor_ie(bss, WPA_IE_VENDOR_TYPE);
 	rsn_ie = wpa_bss_get_ie(bss, WLAN_EID_RSN);
 	wps_ie = wpa_bss_get_vendor_ie(bss, WPS_IE_VENDOR_TYPE);
+
+	wpa_dbus_parse_scan_result_capabilities(wpa_ie, rsn_ie, bss, &extended_capabilities);
 
 	dbus_message_iter_init_append(reply, &iter);
 	if (!wpa_dbus_dict_open_write(&iter, &iter_dict) ||
@@ -446,6 +555,7 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	     !wpa_dbus_dict_append_int32(&iter_dict, "frequency", bss->freq)) ||
 	    !wpa_dbus_dict_append_uint16(&iter_dict, "capabilities",
 					 bss->caps) ||
+		! wpa_dbus_dict_append_uint32(&iter_dict, "extended_capabilities", extended_capabilities) ||
 	    (!(bss->flags & WPA_BSS_QUAL_INVALID) &&
 	     !wpa_dbus_dict_append_int32(&iter_dict, "quality", bss->qual)) ||
 	    (!(bss->flags & WPA_BSS_NOISE_INVALID) &&

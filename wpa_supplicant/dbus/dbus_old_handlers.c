@@ -25,6 +25,10 @@
 #include "dbus_old_handlers.h"
 #include "dbus_dict_helpers.h"
 
+#ifdef CONFIG_WPS
+#include "../wps_supplicant.h"
+#endif
+
 
 #define CAPABILITIES_PROTO_WPA				(1 << 0)
 #define CAPABILITIES_PROTO_WPA2				(1 << 1)
@@ -37,6 +41,12 @@
 #define CAPABILITIES_KEYMGMT_WPA_NONE		(1 << 18)
 #define CAPABILITIES_KEYMGMT_FT_EAP			(1 << 19)
 #define CAPABILITIES_KEYMGMT_FT_PSK			(1 << 20)
+
+#define CAPABILITIES_KEYMGMT_WPS			(1 << 21)
+#define CAPABILITIES_KEYMGMT_WPS_PBC		(1 << 22)
+#define CAPABILITIES_KEYMGMT_WPS_PIN 		(1 << 23)
+
+
 #define CAPABILITIES_CIPHER_NONE			(1 << 24)
 #define CAPABILITIES_CIPHER_WEP40			(1 << 25)
 #define CAPABILITIES_CIPHER_WEP104			(1 << 26)
@@ -423,6 +433,12 @@ static void wpa_dbus_parse_scan_result_capabilities(const u8 *wpa_ie, const u8* 
 {
 	(*ext_cap) = 0;
 	struct wpa_ie_data data;
+
+#ifdef CONFIG_WPS
+	struct wpabuf *wps_ie;
+	wps_ie = wpa_bss_get_vendor_ie_multi(bss, WPS_IE_VENDOR_TYPE);
+#endif
+
 	int has_ie = 0;
 
 	if (wpa_ie)
@@ -451,7 +467,7 @@ static void wpa_dbus_parse_scan_result_capabilities(const u8 *wpa_ie, const u8* 
 		if (! wpa_ie && !rsn_ie && (bss->caps & IEEE80211_CAP_PRIVACY))
 		{
 			(*ext_cap) |= CAPABILITIES_PROTO_WEP;
-			(*ext_cap) |=  CAPABILITIES_CIPHER_WEP40;
+			(*ext_cap) |= CAPABILITIES_CIPHER_WEP40;
 			(*ext_cap) |= CAPABILITIES_CIPHER_WEP104;
 		}
 
@@ -461,6 +477,26 @@ static void wpa_dbus_parse_scan_result_capabilities(const u8 *wpa_ie, const u8* 
 		if (bss->caps & IEEE80211_CAP_ESS)
 			(*ext_cap) |= CAPABILITIES_MODE_INFRA;
 	}
+
+#ifdef CONFIG_WPS
+	if (wps_ie != NULL)
+	{
+		if (wps_is_selected_pbc_registrar(wps_ie))
+		{
+			(*ext_cap) |= CAPABILITIES_KEYMGMT_WPS_PBC;
+		}
+		else if (wps_is_selected_pin_registrar(wps_ie))
+		{
+			(*ext_cap) |= CAPABILITIES_KEYMGMT_WPS_PIN;
+		}
+		else
+		{
+			(*ext_cap) |= CAPABILITIES_KEYMGMT_WPS;
+		}
+		wpabuf_free(wps_ie);
+	}
+#endif
+
 
 	if (! has_ie)
 		return;
@@ -528,7 +564,6 @@ DBusMessage * wpas_dbus_bssid_properties(DBusMessage *message,
 	wpa_ie = wpa_bss_get_vendor_ie(bss, WPA_IE_VENDOR_TYPE);
 	rsn_ie = wpa_bss_get_ie(bss, WLAN_EID_RSN);
 	wps_ie = wpa_bss_get_vendor_ie(bss, WPS_IE_VENDOR_TYPE);
-
 	wpa_dbus_parse_scan_result_capabilities(wpa_ie, rsn_ie, bss, &extended_capabilities);
 
 	dbus_message_iter_init_append(reply, &iter);

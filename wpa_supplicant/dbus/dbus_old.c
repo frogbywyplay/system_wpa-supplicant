@@ -18,7 +18,7 @@
 #include "dbus_old.h"
 #include "dbus_old_handlers.h"
 #include "dbus_common_i.h"
-
+#include "dbus_dict_helpers.h"
 
 /**
  * wpas_dbus_decompose_object_path - Decompose an interface object path into parts
@@ -286,6 +286,12 @@ static DBusHandlerResult wpas_iface_message_handler(DBusConnection *connection,
 			reply = wpas_dbus_iface_wps_pin(message, wpa_s);
 		else if (os_strcmp(method, "wpsReg") == 0)
 			reply = wpas_dbus_iface_wps_reg(message, wpa_s);
+		else if (!os_strcmp(method, "wpsStop"))
+			reply = wpas_dbus_iface_wps_stop(message, wpa_s);
+		else if (!os_strcmp(method, "wpsGetProcessCredentials"))
+			reply = wpas_dbus_iface_wps_get_process_credentials(message, wpa_s);
+		else if (!os_strcmp(method, "wpsSetProcessCredentials"))
+			reply = wpas_dbus_iface_wps_set_process_credentials(message, wpa_s);
 #endif /* CONFIG_WPS */
 		else if (os_strcmp(method, "flush") == 0)
 			reply = wpas_dbus_iface_flush(message, wpa_s);
@@ -499,6 +505,121 @@ void wpa_supplicant_dbus_notify_scanning(struct wpa_supplicant *wpa_s)
 
 
 #ifdef CONFIG_WPS
+
+/**
+ * wpas_dbus_signal_wps_cred - Signals new credentials
+ * @wpa_s: %wpa_supplicant network interface data
+ *
+ * Sends signal with credentials in directory argument
+ */
+static void wpas_dbus_signal_wps_cred(struct wpa_supplicant *wpa_s,
+			       const struct wps_credential *cred)
+{
+	DBusMessage *msg;
+	DBusMessageIter iter, dict_iter;
+	struct wpas_dbus_priv *iface;
+	const char *path;
+	char *auth_type[6]; /* we have six possible authorization types */
+	int at_num = 0;
+	char *encr_type[4]; /* we have four possible encryption types */
+	int et_num = 0;
+
+	iface = wpa_s->global->dbus;
+	path = wpa_s->dbus_path;
+
+	/* Do nothing if the control interface is not turned on */
+	if (iface == NULL)
+		return;
+
+	if (path == NULL) {
+		perror("wpa_supplicant_dbus_notify_wps_cred[dbus]: "
+		       "interface didn't have a dbus path");
+		wpa_printf(MSG_ERROR,
+		           "wpa_supplicant_dbus_notify_wps_cred[dbus]: "
+		           "interface didn't have a dbus path; can't send "
+		           "signal.");
+		return;
+	}
+
+	msg = dbus_message_new_signal(path,
+				      WPAS_DBUS_IFACE_INTERFACE,
+				      "WpsCredentials");
+
+	if (msg == NULL) {
+		wpa_printf(MSG_ERROR, " impossible to create new signal for path : %s interface : %s signal WpsCredential ", path, WPAS_DBUS_IFACE_INTERFACE);
+		goto nomem;
+	}
+
+	dbus_message_iter_init_append(msg, &iter);
+
+	if (!wpa_dbus_dict_open_write(&iter, &dict_iter))
+		goto nomem;
+
+	if (cred->auth_type & WPS_AUTH_OPEN)
+		auth_type[at_num++] = "open";
+	if (cred->auth_type & WPS_AUTH_WPAPSK)
+		auth_type[at_num++] = "wpa-psk";
+	if (cred->auth_type & WPS_AUTH_SHARED)
+		auth_type[at_num++] = "shared";
+	if (cred->auth_type & WPS_AUTH_WPA)
+		auth_type[at_num++] = "wpa-eap";
+	if (cred->auth_type & WPS_AUTH_WPA2)
+		auth_type[at_num++] = "wpa2-eap";
+	if (cred->auth_type & WPS_AUTH_WPA2PSK)
+		auth_type[at_num++] =
+		"wpa2-psk";
+
+	if (cred->encr_type & WPS_ENCR_NONE)
+		encr_type[et_num++] = "none";
+	if (cred->encr_type & WPS_ENCR_WEP)
+		encr_type[et_num++] = "wep";
+	if (cred->encr_type & WPS_ENCR_TKIP)
+		encr_type[et_num++] = "tkip";
+	if (cred->encr_type & WPS_ENCR_AES)
+		encr_type[et_num++] = "aes";
+
+	if (wpa_s->current_ssid) {
+		if (!wpa_dbus_dict_append_byte_array(
+			    &dict_iter, "BSSID",
+			    (const char *) wpa_s->current_ssid->bssid,
+			    ETH_ALEN))
+			goto nomem;
+	}
+
+	if (!wpa_dbus_dict_append_byte_array(&dict_iter, "SSID",
+					     (const char *) cred->ssid,
+					     cred->ssid_len) ||
+	    !wpa_dbus_dict_append_string_array(&dict_iter, "AuthType",
+					       (const char **) auth_type,
+					       at_num) ||
+	    !wpa_dbus_dict_append_string_array(&dict_iter, "EncrType",
+					       (const char **) encr_type,
+					       et_num) ||
+	    !wpa_dbus_dict_append_byte_array(&dict_iter, "Key",
+					     (const char *) cred->key,
+					     cred->key_len) ||
+	    !wpa_dbus_dict_append_uint32(&dict_iter, "KeyIndex",
+					 cred->key_idx) ||
+	    !wpa_dbus_dict_close_write(&iter, &dict_iter))
+		goto nomem;
+
+	dbus_connection_send(iface->con, msg, NULL);
+
+	goto exit;
+
+nomem:
+	perror("wpas_dbus_signal_wps_cred[dbus]: "
+		   "couldn't create dbus signal; likely out of memory");
+	wpa_printf(MSG_ERROR,
+			   "wpas_dbus_signal_wps_cred[dbus]: "
+			   "couldn't create dbus signal; likely out of "
+			   "memory.");
+exit:
+	if (msg != NULL) {
+		dbus_message_unref(msg);
+	}
+}
+
 void wpa_supplicant_dbus_notify_wps_cred(struct wpa_supplicant *wpa_s,
 					 const struct wps_credential *cred)
 {
@@ -507,14 +628,25 @@ void wpa_supplicant_dbus_notify_wps_cred(struct wpa_supplicant *wpa_s,
 
 	/* Do nothing if the control interface is not turned on */
 	if (wpa_s->global == NULL)
+	{
+		wpa_printf(MSG_ERROR, " control interface is not turned on ");
 		return;
+	}
+
 	iface = wpa_s->global->dbus;
 	if (iface == NULL || !wpa_s->dbus_path)
+	{
+		wpa_printf(MSG_ERROR, " interface dbus or dbus path empty ");
 		return;
+	}
+
+	/* Notify using new-style signal. */
+	wpas_dbus_signal_wps_cred(wpa_s, cred);
 
 	_signal = dbus_message_new_signal(wpa_s->dbus_path,
 					  WPAS_DBUS_IFACE_INTERFACE,
 					  "WpsCred");
+
 	if (_signal == NULL) {
 		wpa_printf(MSG_ERROR,
 			   "dbus: %s: Could not create dbus signal; likely out of memory",

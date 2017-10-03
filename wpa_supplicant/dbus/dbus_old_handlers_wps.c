@@ -16,6 +16,8 @@
 #include "dbus_old.h"
 #include "dbus_old_handlers.h"
 
+#include "../src/utils/eloop.h"
+
 /**
  * wpas_dbus_iface_wps_pbc - Request credentials using WPS PBC method
  * @message: Pointer to incoming dbus message
@@ -102,7 +104,8 @@ DBusMessage * wpas_dbus_iface_wps_pin(DBusMessage *message,
 
 	reply = dbus_message_new_method_return(message);
 	if (reply == NULL)
-		return NULL;
+		return dbus_message_new_error(message, DBUS_ERROR_NO_MEMORY,NULL);
+		//return NULL;
 
 	if (ret > 0) {
 		os_snprintf(npin, sizeof(npin), "%08d", ret);
@@ -150,3 +153,117 @@ DBusMessage * wpas_dbus_iface_wps_reg(DBusMessage *message,
 
 	return wpas_dbus_new_success_reply(message);
 }
+
+static void wpas_wps_timeout(void *eloop_ctx, void *timeout_ctx);
+
+
+static void wpas_clear_wps(struct wpa_supplicant *wpa_s)
+{
+	int id;
+	struct wpa_ssid *ssid;
+
+	eloop_cancel_timeout(wpas_wps_timeout, wpa_s, NULL);
+
+	/* Remove any existing WPS network from configuration */
+	ssid = wpa_s->conf->ssid;
+	while (ssid) {
+		if (ssid->key_mgmt & WPA_KEY_MGMT_WPS) {
+			if (ssid == wpa_s->current_ssid) {
+				wpa_s->current_ssid = NULL;
+			}
+			id = ssid->id;
+		} else
+			id = -1;
+
+		ssid = ssid->next;
+		if (id >= 0) {
+			wpa_config_remove_network(wpa_s->conf, id);
+		}
+	}
+}
+
+static int wpas_wps_stop(struct wpa_supplicant *wpa_s)
+{
+	wpas_clear_wps(wpa_s);
+	return 0;
+}
+
+static void wpas_wps_timeout(void *eloop_ctx, void *timeout_ctx)
+{
+	struct wpa_supplicant *wpa_s = eloop_ctx;
+	wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_TIMEOUT "Requested operation timed "
+		"out");
+	wpas_clear_wps(wpa_s);
+}
+
+
+/**
+ * wpas_dbus_iface_wps_stop - Stop the credentials request
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: %wpa_supplicant data structure
+ * Returns: A dbus message containing a UINT32 indicating success (1) or
+ *          failure (0)
+ *
+ * Handler function for "wpsStop" method call
+ */
+
+DBusMessage * wpas_dbus_iface_wps_stop(DBusMessage *message,
+				      struct wpa_supplicant *wpa_s)
+{
+	if (wpas_wps_stop(wpa_s))
+		return dbus_message_new_error(message,WPAS_ERROR_WPS_STOP_ERROR,"Could not stop credentials request");
+	return wpas_dbus_new_success_reply(message);
+}
+
+/**
+ * wpas_dbus_iface_wps_get_process_credentials - Check if credentials are processed
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: %wpa_supplicant data structure
+ * Returns: DBus message with a boolean on success or DBus error on failure
+ *
+ * Getter for "ProcessCredentials" property. Returns returned boolean will be
+ * true if wps_cred_processing configuration field is not equal to 1 or false
+ * if otherwise.
+ */
+DBusMessage * wpas_dbus_iface_wps_get_process_credentials(
+	DBusMessage *message, struct wpa_supplicant *wpa_s)
+{
+	dbus_bool_t process = (wpa_s->conf->wps_cred_processing != 1);
+	DBusMessage *reply = NULL;
+	reply = dbus_message_new_method_return(message);
+	if (reply != NULL) {
+		dbus_message_append_args(reply, DBUS_TYPE_BOOLEAN,
+					 &process, DBUS_TYPE_INVALID);
+
+	} else {
+		wpa_printf(MSG_ERROR, "dbus: wpas_dbus_get_process_credentials:"
+			   " out of memory to return property value");
+		reply = dbus_message_new_error(message, DBUS_ERROR_NO_MEMORY,
+					       NULL);
+	}
+	return reply;
+}
+
+/**
+ * wpas_dbus_iface_wps_set_process_credentials - Set credentials_processed conf param
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: %wpa_supplicant data structure
+ * Returns: NULL on success or DBus error on failure
+ *
+ * Setter for "ProcessCredentials" property. Sets credentials_processed on 2
+ * if boolean argument is true or on 1 if otherwise.
+ */
+DBusMessage * wpas_dbus_iface_wps_set_process_credentials(
+	DBusMessage *message, struct wpa_supplicant *wpa_s)
+{
+	dbus_bool_t process_credentials;
+
+	if (!dbus_message_get_args(message, NULL,
+				   DBUS_TYPE_BOOLEAN, &process_credentials,
+				   DBUS_TYPE_INVALID)) {
+		return wpas_dbus_new_invalid_opts_error(message, NULL);
+	}
+	wpa_s->conf->wps_cred_processing = (process_credentials ? 2 : 1);
+	return wpas_dbus_new_success_reply(message);
+}
+

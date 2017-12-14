@@ -467,6 +467,57 @@ out:
 
 
 /**
+ * wpa_supplicant_dbus_notify_disconnection_reason - Send a disconnection reason signal
+ * @wpa_s: %wpa_supplicant network interface data
+ * @reason: defined in src/common/ieee802_11_defs.h where 0 is a special value
+ *          consider it to be WRONG_KEY if hint == "WRONG_KEY".
+ * @hint: 1 for WRONG KEY, 0 otherwise
+ * Returns: Nothing
+ *
+ * Notify listeners that wpa_supplicant has encountered a disconnection reason
+ */
+void wpa_supplicant_dbus_notify_disconnect_reason(struct wpa_supplicant *wpa_s, int reason, int hint)
+{
+	struct wpas_dbus_priv *iface;
+	DBusMessage *_signal = NULL;
+
+	if (wpa_s->dbus_path == NULL)
+		return; /* Skip signal since D-Bus setup is not yet ready */
+
+	/* Do nothing if the control interface is not turned on */
+	if (wpa_s->global == NULL)
+		return;
+	iface = wpa_s->global->dbus;
+	if (iface == NULL)
+		return;
+
+	_signal = dbus_message_new_signal(wpa_s->dbus_path,
+					  WPAS_DBUS_IFACE_INTERFACE,
+					  "LastDisconnectReason");
+	if (_signal == NULL) {
+		wpa_printf(MSG_ERROR,
+			   "dbus: %s: could not create dbus signal; likely out of memory",
+			   __func__);
+		return;
+	}
+
+	if (!dbus_message_append_args(_signal,
+			    DBUS_TYPE_INT32, &reason,
+			    DBUS_TYPE_INT32, &hint,
+				DBUS_TYPE_INVALID)) {
+		wpa_printf(MSG_ERROR,
+			   "dbus: %s: Not enough memory to construct state change signal",
+			   __func__);
+		goto out;
+	}
+
+	dbus_connection_send(iface->con, _signal, NULL);
+
+out:
+	dbus_message_unref(_signal);
+}
+
+/**
  * wpa_supplicant_dbus_notify_scanning - send scanning status
  * @wpa_s: %wpa_supplicant network interface data
  * Returns: 0 on success, -1 on failure

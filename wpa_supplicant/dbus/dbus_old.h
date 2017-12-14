@@ -90,6 +90,7 @@ char * wpas_dbus_decompose_object_path(const char *path, char **network,
 int wpas_dbus_register_iface(struct wpa_supplicant *wpa_s);
 int wpas_dbus_unregister_iface(struct wpa_supplicant *wpa_s);
 
+void wpa_supplicant_dbus_notify_disconnect_reason(struct wpa_supplicant *wpa_s, int reason, int hint);
 
 /* Methods internal to the dbus control interface */
 struct wpa_supplicant * wpa_supplicant_get_iface_by_dbus_path(
@@ -140,6 +141,10 @@ wpas_dbus_unregister_iface(struct wpa_supplicant *wpa_s)
 	return 0;
 }
 
+static inline void
+wpa_supplicant_dbus_notify_disconnect_reason(struct wpa_supplicant *wpa_s, int reason, int hint)
+{
+}
 #endif /* CONFIG_CTRL_IFACE_DBUS */
 
 #endif /* CTRL_IFACE_DBUS_H */

@@ -131,10 +131,13 @@ void wpas_notify_state_changed(struct wpa_supplicant *wpa_s,
 }
 
 
-void wpas_notify_disconnect_reason(struct wpa_supplicant *wpa_s)
+void wpas_notify_disconnect_reason(struct wpa_supplicant *wpa_s, int hint)
 {
 	if (wpa_s->p2p_mgmt)
 		return;
+
+	/* notify the old DBus API */
+	wpa_supplicant_dbus_notify_disconnect_reason(wpa_s, wpa_s->disconnect_reason, hint);
 
 	wpas_dbus_signal_prop_changed(wpa_s, WPAS_DBUS_PROP_DISCONNECT_REASON);
 }

@@ -1,0 +1,12 @@
+2.6.4 -- 15/01/2018
+
+- add LastDisconnectReason dbus signal:
+
+<signal name="LastDisconnectReason" wy:desc="Sent when an
+disconnection occurs, contains reason">
+￼         <arg type="i" name="reason" direction="in"
+wy:desc="reason"/>
+￼         <arg type="i" name="hint_wrong_key" direction="in"
+wy:desc="wrong key hint"/>
+</signal>
+

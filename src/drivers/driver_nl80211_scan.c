@@ -561,6 +561,23 @@ static int nl80211_scan_filtered(struct wpa_driver_nl80211_data *drv,
 	return 1;
 }
 
+/*
+ * We are using linear transform.
+ * (see https://www.adriangranados.com/blog/dbm-to-percent-conversion) 
+ *percent = 100 x (1 - (PdBm_max - PdBm) / (PdBm_max - PdBm_min))
+ *Humax (mediatek driver) proposed  -100 and -50 as respec Min and Max levels. 
+ *According to litterature -90 and -20 are more real values.
+ *open source mtk driver (https://github.com/openwrt/mtk-wifi-gpl.git)
+ *is using -90 and -40 so I am using the latter ones.
+ */
+static uint32_t nl80211_dbm_to_percent(int32_t dbm) {
+	if (dbm < -90)
+                return 0;
+	else if (dbm > -40)
+		return 100;
+	else
+		return (2 * (dbm + 90));
+}
 
 int bss_info_handler(struct nl_msg *msg, void *arg)
 {
@@ -658,10 +675,12 @@ int bss_info_handler(struct nl_msg *msg, void *arg)
 	if (bss[NL80211_BSS_SIGNAL_MBM]) {
 		r->level = nla_get_u32(bss[NL80211_BSS_SIGNAL_MBM]);
 		r->level /= 100; /* mBm to dBm */
-		r->flags |= WPA_SCAN_LEVEL_DBM | WPA_SCAN_QUAL_INVALID;
+		r->flags |= WPA_SCAN_LEVEL_DBM /*| WPA_SCAN_QUAL_INVALID*/;
+		r->qual = nl80211_dbm_to_percent(r->level); 
 	} else if (bss[NL80211_BSS_SIGNAL_UNSPEC]) {
 		r->level = nla_get_u8(bss[NL80211_BSS_SIGNAL_UNSPEC]);
-		r->flags |= WPA_SCAN_QUAL_INVALID;
+		/*r->flags |= WPA_SCAN_QUAL_INVALID;*/
+		r->qual = r->level;
 	} else
 		r->flags |= WPA_SCAN_LEVEL_INVALID | WPA_SCAN_QUAL_INVALID;
 	if (bss[NL80211_BSS_TSF])

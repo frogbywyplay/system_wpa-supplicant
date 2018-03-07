@@ -61,6 +61,9 @@ ifdef CONFIG_BUILD_WPA_CLIENT_SO
 ALL += libwpa_client.so
 endif
 
+ifdef CONFIG_HARDENING
+LDFLAGS += $(shell $(PKG_CONFIG) --libs lxc_genesis)
+endif
 
 all: verify_config $(ALL) dynamic_eap_methods
 

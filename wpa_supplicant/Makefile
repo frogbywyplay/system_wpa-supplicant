@@ -1548,6 +1548,12 @@ OBJS += autoscan_periodic.o
 NEED_AUTOSCAN=y
 endif
 
+# Suppress the periodic scan when trying to connect to an access point.
+# Needed to overcome a deficiency of the LKR01's wifi driver.
+ifdef CONFIG_AUTOSCAN_TWEAK
+CFLAGS += -DCONFIG_AUTOSCAN_TWEAK
+endif
+
 ifdef NEED_AUTOSCAN
 CFLAGS += -DCONFIG_AUTOSCAN
 OBJS += autoscan.o

@@ -1739,10 +1739,11 @@ static int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
 				return 0;
 			}
 #endif /* CONFIG_WPS */
+#ifndef CONFIG_AUTOSCAN_TWEAK
 			if (wpa_supplicant_req_sched_scan(wpa_s))
 				wpa_supplicant_req_new_scan(wpa_s, timeout_sec,
 							    timeout_usec);
-
+#endif /* CONFIG_AUTOSCAN_TWEAK */
 			wpa_msg_ctrl(wpa_s, MSG_INFO,
 				     WPA_EVENT_NETWORK_NOT_FOUND);
 		}
